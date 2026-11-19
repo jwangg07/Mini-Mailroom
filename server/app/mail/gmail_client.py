@@ -19,27 +19,41 @@ class GmailClient:
     def __init__(self, credentials: GmailCredentials):
         self.credentials = credentials
 
-    def request(self, user_id: str, method: str, path: str, **kwargs) -> dict:
-        return self.for_requests(user_id, method).request(path, **kwargs)
+    def request(
+        self,
+        user_id: str,
+        method: str,
+        path: str,
+        *,
+        scopes: set[str] | None = None,
+        **kwargs,
+    ) -> dict:
+        return self.for_requests(user_id, method, scopes=scopes).request(path, **kwargs)
 
-    def for_requests(self, user_id: str, method: str) -> "_GmailRequests":
-        return _GmailRequests(self.credentials, user_id, method)
+    def for_requests(
+        self, user_id: str, method: str, *, scopes: set[str] | None = None
+    ) -> "_GmailRequests":
+        if scopes is None:
+            scopes = READ_SCOPES if method == "GET" else SEND_SCOPES
+        return _GmailRequests(self.credentials, user_id, method, scopes)
 
 
 class _GmailRequests:
     """Credentials for the Gmail calls made by one app request."""
 
-    def __init__(self, credentials: GmailCredentials, user_id: str, method: str):
+    def __init__(
+        self, credentials: GmailCredentials, user_id: str, method: str, scopes: set[str]
+    ):
         self.credentials = credentials
         self.user_id = user_id
         self.method = method
+        self.scopes = scopes
         self._recovery_lock = Lock()
         self._recovery: Future[str] = Future()
         self._token = self._authorize(*credentials.load(user_id))
 
     def _authorize(self, encrypted: str, data: dict, *, force: bool = False) -> str:
-        needed = READ_SCOPES if self.method == "GET" else SEND_SCOPES
-        if not needed.intersection(data["scopes"]):
+        if not self.scopes.intersection(data["scopes"]):
             raise reconnect()
         expiry = (
             datetime.fromisoformat(data["expiry"]).replace(tzinfo=UTC).timestamp()
@@ -52,7 +66,7 @@ class _GmailRequests:
             or expiry <= datetime.now(UTC).timestamp() + 60
         ):
             data = self.credentials.refresh(self.user_id, encrypted, data)
-        if not needed.intersection(data["scopes"]):
+        if not self.scopes.intersection(data["scopes"]):
             raise reconnect()
         return data["token"]
 
@@ -104,7 +118,7 @@ class _GmailRequests:
         except requests.RequestException:
             detail = (
                 "Send result unknown. Check Sent in Gmail before sending again."
-                if method == "POST"
+                if path == "/messages/send"
                 else "Gmail temporarily unavailable."
             )
             raise HTTPException(503, detail) from None
@@ -125,7 +139,7 @@ class _GmailRequests:
         if response.status_code != 200:
             detail = (
                 "Send result unknown. Check Sent in Gmail before sending again."
-                if method == "POST" and response.status_code >= 500
+                if path == "/messages/send" and response.status_code >= 500
                 else "Gmail could not complete this request."
             )
             raise HTTPException(502, detail)

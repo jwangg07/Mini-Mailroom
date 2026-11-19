@@ -29,7 +29,8 @@ def mail_summary(data: dict) -> dict:
 def mail_message(data: dict) -> dict:
     payload = data.get("payload", {})
     headers = _headers(payload)
-    text = "This message has no plain-text version. View it in Gmail."
+    bodies: dict[str, str] = {}
+    fallback = "This message has no displayable body. View it in Gmail."
     pending = [(payload, 0)]
     visited = 0
     while pending:
@@ -38,15 +39,22 @@ def mail_message(data: dict) -> dict:
         if depth > 20 or visited > 100:
             raise HTTPException(413, "This message is too complex. Open it in Gmail.")
         part_headers = _headers(part)
-        if part.get("filename") or part_headers.get(
-            "content-disposition", ""
-        ).lower().startswith("attachment"):
+        mime_type = part.get("mimeType")
+        if (
+            mime_type == "message/rfc822"
+            or part.get("filename")
+            or part_headers.get("content-disposition", "")
+            .lower()
+            .startswith("attachment")
+        ):
             continue
-        if part.get("mimeType") == "text/plain":
-            encoded = part.get("body", {}).get("data", "")
-            if part.get("body", {}).get("attachmentId") and not encoded:
-                text = "This message's text is too large to preview. Open it in Gmail."
-                break
+        if mime_type in ("text/plain", "text/html") and mime_type not in bodies:
+            body = part.get("body", {})
+            encoded = body.get("data", "")
+            if not encoded:
+                if body.get("attachmentId"):
+                    fallback = "This message is too large to preview. Open it in Gmail."
+                continue
             if len(encoded) > 1_400_000:
                 raise HTTPException(413, "This message is too large. Open it in Gmail.")
             try:
@@ -55,7 +63,7 @@ def mail_message(data: dict) -> dict:
                 )
                 content_type = Message(policy=policy.default)
                 content_type["Content-Type"] = part_headers.get(
-                    "content-type", "text/plain; charset=utf-8"
+                    "content-type", mime_type
                 )
                 try:
                     text = raw.decode(
@@ -64,14 +72,20 @@ def mail_message(data: dict) -> dict:
                 except LookupError:
                     text = raw.decode("utf-8", errors="replace")
             except (ValueError, TypeError):
+                if mime_type == "text/html":
+                    continue
                 raise HTTPException(502, "Gmail returned an invalid message.") from None
-            break
+            bodies[mime_type] = text
+            if len(bodies) == 2:
+                break
         pending.extend((child, depth + 1) for child in reversed(part.get("parts", [])))
     return {
         "id": data["id"],
         "from": headers.get("from", ""),
         "subject": headers.get("subject", "(No subject)"),
-        "body": text,
+        "body": bodies.get("text/plain", fallback),
+        "html": bodies.get("text/html"),
+        "labelIds": data.get("labelIds", []),
     }
 
 

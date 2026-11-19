@@ -4,6 +4,7 @@ type InboxProps = {
   page: InboxPage
   pageToken: string
   loading: boolean
+  updating: boolean
   error: string
   refreshInbox: () => void
   showOlderMessages: () => void
@@ -14,6 +15,7 @@ export default function Inbox({
   page,
   pageToken,
   loading,
+  updating,
   error,
   refreshInbox,
   showOlderMessages,
@@ -23,7 +25,11 @@ export default function Inbox({
     <>
       <div className="mail-toolbar">
         <h2>Inbox</h2>
-        <button className="secondary" disabled={loading} onClick={refreshInbox}>
+        <button
+          className="secondary"
+          disabled={loading || updating}
+          onClick={refreshInbox}
+        >
           Refresh inbox
         </button>
         <a href="/auth/google/login?reconnect=true">Reconnect Gmail</a>
@@ -47,6 +53,7 @@ export default function Inbox({
                     className={
                       mail.unread ? 'message-row unread' : 'message-row'
                     }
+                    disabled={updating}
                     onClick={() => void onOpenMessage(mail.id)}
                   >
                     <span className="message-from">
@@ -64,12 +71,20 @@ export default function Inbox({
             </ul>
           )}
           {page.nextPageToken && (
-            <button className="secondary" onClick={showOlderMessages}>
+            <button
+              className="secondary"
+              disabled={updating}
+              onClick={showOlderMessages}
+            >
               Older messages
             </button>
           )}
           {pageToken && (
-            <button className="secondary" onClick={refreshInbox}>
+            <button
+              className="secondary"
+              disabled={updating}
+              onClick={refreshInbox}
+            >
               Newest messages
             </button>
           )}

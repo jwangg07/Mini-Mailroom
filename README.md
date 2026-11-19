@@ -1,7 +1,8 @@
 # Mini-Mailroom
 
 A Gmail client growing into a cozy pixel-art mailroom. Sign in with Google,
-browse and paginate your inbox, read plain-text messages, and send email.
+browse and paginate your inbox, read and send email, apply labels, and move
+messages to Trash.
 
 See the [security guide](docs/SECURITY_CHANGES.md) for the changes and rollout steps.
 
@@ -160,9 +161,10 @@ per user and stored separately from browser sessions; access tokens refresh when
 needed. The browser holds only an opaque HttpOnly, SameSite session cookie.
 
 Sessions last eight hours and persist across backend instances when DynamoDB is
-configured. Inbox lists use 20 messages per page; opening a message displays its
-plain-text body without rendering email HTML. Sending supports one recipient and
-a plain-text body. Attachments and search remain future work. The single Sign out
+configured. Inbox lists use 20 messages per page. Opening a message shows its HTML
+in a sandboxed preview or displays its plain text. The preview blocks remote images.
+Sending supports one recipient and a plain-text body. Attachments and search remain
+future work. The single Sign out
 action revokes the Google grant,
 removes stored access, and invalidates all of that user's sessions. Failures are
 reported as incomplete, with the session and credentials preserved for retry.

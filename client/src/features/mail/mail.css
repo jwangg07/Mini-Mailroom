@@ -75,6 +75,19 @@
   line-height: 1.6;
 }
 
+.message-detail label {
+  display: block;
+}
+
+.message-html {
+  display: block;
+  width: 100%;
+  height: min(65vh, 36rem);
+  margin-top: 12px;
+  border: 0;
+  background: white;
+}
+
 .compose {
   margin-top: 32px;
 }

@@ -42,6 +42,14 @@ export function useInbox() {
     setReload((value) => value + 1)
   }
 
+  function removeMessage(id: string) {
+    setPage((current) => ({
+      ...current,
+      messages: current.messages.filter((message) => message.id !== id),
+    }))
+    setReload((value) => value + 1)
+  }
+
   function showOlderMessages() {
     if (page.nextPageToken) setPageToken(page.nextPageToken)
   }
@@ -52,6 +60,7 @@ export function useInbox() {
     loading,
     error,
     refreshInbox,
+    removeMessage,
     showOlderMessages,
   }
 }

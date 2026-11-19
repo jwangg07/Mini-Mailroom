@@ -13,13 +13,9 @@ from app.auth.store import AuthStore
 from integrations.google.credential_vault import CredentialVault
 
 PREFIX = "https://www.googleapis.com/auth/gmail."
-READ_SCOPES = {PREFIX + "readonly", PREFIX + "modify", "https://mail.google.com/"}
-SEND_SCOPES = {
-    PREFIX + "send",
-    PREFIX + "compose",
-    PREFIX + "modify",
-    "https://mail.google.com/",
-}
+MODIFY_SCOPES = {PREFIX + "modify", "https://mail.google.com/"}
+READ_SCOPES = MODIFY_SCOPES | {PREFIX + "readonly"}
+SEND_SCOPES = MODIFY_SCOPES | {PREFIX + "send", PREFIX + "compose"}
 
 
 def reconnect() -> HTTPException:

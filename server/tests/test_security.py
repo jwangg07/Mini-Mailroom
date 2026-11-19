@@ -404,7 +404,7 @@ def test_large_request_is_rejected_before_parsing():
         assert response.headers["Cache-Control"] == "no-store"
 
 
-def test_message_ignores_attachments_html_and_handles_unknown_charset():
+def test_message_ignores_attachments_and_invalid_html_and_handles_unknown_charset():
     encoded = base64.urlsafe_b64encode(b"Safe text").decode()
     message = mail_message(
         {
@@ -417,7 +417,7 @@ def test_message_ignores_attachments_html_and_handles_unknown_charset():
                         "filename": "attachment.txt",
                         "body": {"data": "invalid"},
                     },
-                    {"mimeType": "text/html", "body": {"data": "invalid"}},
+                    {"mimeType": "text/html", "body": {"data": "invalid!"}},
                     {
                         "mimeType": "text/plain",
                         "headers": [
@@ -433,6 +433,7 @@ def test_message_ignores_attachments_html_and_handles_unknown_charset():
         }
     )
     assert message["body"] == "Safe text"
+    assert message["html"] is None
 
 
 def test_oversize_provider_response_stops_reading_and_closes(monkeypatch):

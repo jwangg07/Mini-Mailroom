@@ -3,6 +3,11 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
+class MailLabelChange(BaseModel):
+    label_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+    applied: bool
+
+
 class MailDraft(BaseModel):
     to: EmailStr
     subject: str = Field(max_length=998)

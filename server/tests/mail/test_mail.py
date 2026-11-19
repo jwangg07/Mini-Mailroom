@@ -76,6 +76,9 @@ def test_capture_preserves_refresh_token_and_tracks_actual_scopes(setup):
     with pytest.raises(HTTPException) as exc:
         service.send("alice", "alice@example.com", "bob@example.com", "Hi", "Body")
     assert exc.value.status_code == 409
+    with pytest.raises(HTTPException) as exc:
+        service.trash("alice", "abc")
+    assert exc.value.status_code == 409
 
 
 def test_dynamodb_credentials_have_retention_ttl_and_conditional_refresh(monkeypatch):
@@ -208,11 +211,12 @@ def test_send_creates_mime_and_never_retries_timeout(setup):
     assert "Check Sent" in exc.value.detail and session.request.call_count == 1
 
 
-def test_read_plain_text_not_html_and_list_pagination(setup):
+def test_read_html_and_plain_text_and_list_pagination(setup):
     _, _, service, session = setup
     session.request.return_value = provider_response(
         {
             "id": "abc",
+            "labelIds": ["INBOX", "Label_123"],
             "payload": {
                 "mimeType": "multipart/alternative",
                 "parts": [
@@ -226,7 +230,7 @@ def test_read_plain_text_not_html_and_list_pagination(setup):
                         "mimeType": "text/html",
                         "body": {
                             "data": base64.urlsafe_b64encode(
-                                b"<script>bad()</script>"
+                                b"<b>Rich text</b>"
                             ).decode()
                         },
                     },
@@ -234,7 +238,10 @@ def test_read_plain_text_not_html_and_list_pagination(setup):
             },
         }
     )
-    assert service.message("alice", "abc")["body"].strip() == "Safe text"
+    message = service.message("alice", "abc")
+    assert message["body"] == "Safe text"
+    assert message["html"] == "<b>Rich text</b>"
+    assert message["labelIds"] == ["INBOX", "Label_123"]
     assert session.request.call_args.kwargs["params"]["format"] == "full"
     session.request.side_effect = [
         provider_response({"messages": [{"id": "abc"}], "nextPageToken": "next"}),
@@ -249,6 +256,61 @@ def test_read_plain_text_not_html_and_list_pagination(setup):
     page = service.inbox("alice", "older")
     assert page["nextPageToken"] == "next" and page["messages"][0]["unread"]
     assert session.request.call_args_list[-2].kwargs["params"]["pageToken"] == "older"
+
+
+def test_mailbox_labels_and_trash(setup, monkeypatch):
+    store, vault, _, gmail = setup
+    store.save_session(
+        "session",
+        Session({"id": "alice", "email": "alice@example.com"}, int(time.time()) + 600),
+    )
+    monkeypatch.setattr("app.application.CredentialVault", lambda *_: vault)
+    gmail.request.side_effect = [
+        provider_response(
+            {
+                "labels": [
+                    {"id": "INBOX", "name": "INBOX", "type": "system"},
+                    {"id": "Label_123", "name": "Work", "type": "user"},
+                ]
+            }
+        ),
+        provider_response({"labelIds": ["INBOX", "Label_123"]}),
+        provider_response({"labelIds": ["INBOX"]}),
+        provider_response({"id": "abc"}),
+    ]
+    path = "/api/mail/messages/abc"
+    headers = {"X-Mailroom-Request": "1"}
+    app = create_app(Settings(_env_file=None), store=store)
+    with TestClient(app) as client:
+        assert client.get("/api/mail/labels").status_code == 401
+        assert client.post(path + "/trash", headers=headers).status_code == 401
+        client.cookies.set(SESSION_COOKIE, "session")
+        assert client.post(path + "/trash").status_code == 403
+        assert (
+            client.post(
+                path + "/labels", json={"label_id": "Label_123", "applied": True}
+            ).status_code
+            == 403
+        )
+        assert client.get("/api/mail/labels").json() == [
+            {"id": "Label_123", "name": "Work"}
+        ]
+        for applied, expected in [(True, ["INBOX", "Label_123"]), (False, ["INBOX"])]:
+            response = client.post(
+                path + "/labels",
+                headers=headers,
+                json={"label_id": "Label_123", "applied": applied},
+            )
+            assert response.json() == {"labelIds": expected}
+        assert client.post(path + "/trash", headers=headers).json() == {"id": "abc"}
+
+    labels, add, remove, trash = gmail.request.call_args_list
+    assert labels.args[1].endswith("/labels")
+    assert add.args[1].endswith("/messages/abc/modify")
+    assert add.kwargs["json"] == {"addLabelIds": ["Label_123"]}
+    assert remove.kwargs["json"] == {"removeLabelIds": ["Label_123"]}
+    assert trash.args[1].endswith("/messages/abc/trash")
+    assert trash.kwargs["params"] == {"fields": "id"}
 
 
 def test_inbox_loads_and_decrypts_credentials_once_per_page(setup, monkeypatch):

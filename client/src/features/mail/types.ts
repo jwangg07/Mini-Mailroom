@@ -8,9 +8,17 @@ export type MailSummary = {
 }
 
 export type MailMessage = {
+  id: string
   from: string
   subject: string
   body: string
+  html: string | null
+  labelIds: string[]
+}
+
+export type MailLabel = {
+  id: string
+  name: string
 }
 
 export type InboxPage = {

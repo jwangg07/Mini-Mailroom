@@ -62,9 +62,9 @@ hooks own their state and requests. Only `application.py` assembles backend obje
    conditional update so it cannot overwrite a newer login or refresh. HTTP errors
    become safe messages; a rejected 401 can refresh and retry once.
 5. `Mailbox.openMessage()` aborts any previous message request before loading
-   `/api/mail/messages/{id}`. The backend selects plain text from Gmail's structured full message, skips
-   attachments, and limits response bytes and nesting;
-   `MessageDetail` displays it as text without injecting email HTML.
+   `/api/mail/messages/{id}`. The backend selects HTML and plain text from Gmail's
+   structured message, skips attachments, and limits response bytes and nesting.
+   `EmailBody` sanitizes HTML and displays it in a sandboxed frame.
 
 ## Send email
 
