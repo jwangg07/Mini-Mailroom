@@ -37,10 +37,20 @@ button:disabled {
 
 .mailroom {
   min-height: 100svh;
+}
+
+.mailroom:not(.mailroom-signed-in) {
   display: grid;
   place-items: center;
   padding: 32px 20px;
   gap: 24px;
+}
+
+.mailroom-signed-in {
+  display: block;
+  width: min(100%, 1680px);
+  margin: 0 auto;
+  padding: 0 24px 20px;
 }
 
 .google-button,

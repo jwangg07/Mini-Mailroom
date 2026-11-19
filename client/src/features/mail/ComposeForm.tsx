@@ -1,9 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { sendMail } from './api'
 import type { MailDraft } from './types'
 
-export default function ComposeForm() {
+export default function ComposeForm({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [draft, setDraft] = useState<MailDraft>({
     to: '',
     subject: '',
@@ -14,6 +14,10 @@ export default function ComposeForm() {
   const [notice, setNotice] = useState('')
   // A ref blocks a second submit before React renders the disabled fieldset.
   const sendingRequest = useRef(false)
+  const recipient = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (open) recipient.current?.focus()
+  }, [open])
 
   async function sendDraft(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -39,12 +43,16 @@ export default function ComposeForm() {
   }
 
   return (
-    <form className="compose" onSubmit={(event) => void sendDraft(event)}>
-      <h2>Write a letter</h2>
+    <form id="mail-compose" className="compose" hidden={!open} onSubmit={(event) => void sendDraft(event)}>
+      <div className="compose-heading">
+        <h2>New message</h2>
+        <button className="secondary" type="button" onClick={onClose}>Close</button>
+      </div>
       <fieldset disabled={sending}>
         <label htmlFor="recipient">To</label>
         <input
           id="recipient"
+          ref={recipient}
           type="email"
           required
           value={draft.to}

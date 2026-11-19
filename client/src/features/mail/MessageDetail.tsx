@@ -27,14 +27,14 @@ export default function MessageDetail({
     <article className="message-detail" aria-label="Open message">
       <div className="mail-toolbar">
         <button className="secondary" disabled={updating} onClick={onClose}>
-          Close message
+          Back to inbox
         </button>
         <button className="secondary" disabled={updating} onClick={onTrash}>
           Move to Trash
         </button>
       </div>
-      <h3>{message.subject || '(No subject)'}</h3>
-      <p>{message.from}</p>
+      <h2>{message.subject || '(No subject)'}</h2>
+      <p className="message-sender">{message.from}</p>
       <details>
         <summary>
           {appliedLabels?.length ? `Labels (${appliedLabels.join(', ')})` : 'Labels'}
@@ -59,7 +59,7 @@ export default function MessageDetail({
           </fieldset>
         )}
       </details>
-      <EmailBody html={message.html} text={message.body} />
+      <EmailBody message={message} />
     </article>
   )
 }

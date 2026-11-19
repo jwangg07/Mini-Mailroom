@@ -51,21 +51,95 @@ h1 {
   margin: 22px 0 0;
 }
 
-.account {
-  padding-top: 4px;
+.account-bar,
+.mailroom-brand,
+.account-menu summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.status {
-  display: inline-block;
-  background: #e9f0e3;
-  color: #46663d;
-  padding: 5px 10px;
-  border-radius: 20px;
-  font-size: 12px;
+.account-bar {
+  position: relative;
+  z-index: 2;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  min-height: 72px;
+  padding: 10px 0;
+}
+
+.mailroom-brand .mail-mark {
+  width: 38px;
+  height: 38px;
+  margin: 0;
+  border-radius: 10px;
+  font-size: 23px;
+}
+
+.mailroom-brand h1 {
+  margin: 0;
+  color: #234734;
+  font-size: clamp(20px, 3vw, 27px);
+  letter-spacing: -0.025em;
+}
+
+.account-menu {
+  position: relative;
+}
+
+.account-menu summary {
+  padding: 4px 12px 4px 4px;
+  border: 1px solid #d9dfd4;
+  border-radius: 999px;
+  cursor: pointer;
+  list-style: none;
+  color: #3e5043;
+  font-size: 13px;
+}
+
+.account-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.account-avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #315d43;
+  color: #fff;
+  font-weight: 650;
+}
+
+.account-popover {
+  position: absolute;
+  inset: calc(100% + 10px) 0 auto auto;
+  width: min(280px, 90vw);
+  padding: 16px;
+  border: 1px solid #d9dfd4;
+  border-radius: 14px;
+  background: #fffdf8;
+  box-shadow: 0 12px 32px #20382824;
+}
+
+.account-message {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 .email {
   margin: 0;
   color: #717468;
   overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .account-address {
+    display: none;
+  }
+
+  .account-menu summary {
+    padding: 3px;
+  }
 }

@@ -8,7 +8,7 @@ from app.auth.rate_limit import limit_requests
 from app.auth.security import require_origin, require_user
 from app.auth.store import AuthStore
 from app.config import Settings
-from app.mail.schemas import MailDraft, MailLabelChange
+from app.mail.schemas import InlineImageRequest, MailDraft, MailLabelChange
 from app.mail.service import GmailService
 
 
@@ -36,6 +36,16 @@ def create_mail_router(
         limit_requests(store, "mail", user["id"], settings.mail_requests_per_minute)
         validate_message_id(message_id)
         return mail_service().message(user["id"], message_id)
+
+    @router.post("/api/mail/messages/{message_id}/inline-images")
+    def inline_images(request: Request, message_id: str, images: InlineImageRequest):
+        require_origin(request, settings)
+        user = require_user(request, store, settings)
+        limit_requests(store, "mail", user["id"], settings.mail_requests_per_minute)
+        validate_message_id(message_id)
+        return mail_service().inline_images(
+            user["id"], message_id, images.attachment_ids
+        )
 
     @router.get("/api/mail/labels")
     def labels(request: Request):

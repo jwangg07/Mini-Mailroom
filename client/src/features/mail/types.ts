@@ -14,6 +14,13 @@ export type MailMessage = {
   body: string
   html: string | null
   labelIds: string[]
+  inlineImages: Record<string, InlineImage>
+}
+
+type InlineImage = {
+  mimeType: string
+  data?: string
+  attachmentId?: string
 }
 
 export type MailLabel = {

@@ -6,6 +6,17 @@ from email.message import EmailMessage, Message
 
 from fastapi import HTTPException
 
+MAX_INLINE_IMAGES = 12
+MAX_INLINE_IMAGE_BYTES = 1_048_576
+MAX_INLINE_IMAGE_DATA = 1_400_000
+INLINE_IMAGE_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/avif",
+}
+
 
 def _headers(part: dict) -> dict[str, str]:
     return {
@@ -30,6 +41,7 @@ def mail_message(data: dict) -> dict:
     payload = data.get("payload", {})
     headers = _headers(payload)
     bodies: dict[str, str] = {}
+    images: dict[str, dict] = {}
     fallback = "This message has no displayable body. View it in Gmail."
     pending = [(payload, 0)]
     visited = 0
@@ -40,6 +52,25 @@ def mail_message(data: dict) -> dict:
             raise HTTPException(413, "This message is too complex. Open it in Gmail.")
         part_headers = _headers(part)
         mime_type = part.get("mimeType")
+        body = part.get("body", {})
+        content_id = part_headers.get("content-id", "").strip().strip("<>")
+        image_data, attachment_id = body.get("data"), body.get("attachmentId")
+        if (
+            mime_type in INLINE_IMAGE_TYPES
+            and content_id
+            and len(content_id) <= 512
+            and content_id not in images
+            and len(images) < MAX_INLINE_IMAGES
+            and body.get("size", 0) <= MAX_INLINE_IMAGE_BYTES
+            and (image_data or attachment_id)
+        ):
+            if image_data and len(image_data) <= MAX_INLINE_IMAGE_DATA:
+                images[content_id] = {"mimeType": mime_type, "data": image_data}
+            elif attachment_id:
+                images[content_id] = {
+                    "mimeType": mime_type,
+                    "attachmentId": attachment_id,
+                }
         if (
             mime_type == "message/rfc822"
             or part.get("filename")
@@ -49,7 +80,6 @@ def mail_message(data: dict) -> dict:
         ):
             continue
         if mime_type in ("text/plain", "text/html") and mime_type not in bodies:
-            body = part.get("body", {})
             encoded = body.get("data", "")
             if not encoded:
                 if body.get("attachmentId"):
@@ -76,8 +106,6 @@ def mail_message(data: dict) -> dict:
                     continue
                 raise HTTPException(502, "Gmail returned an invalid message.") from None
             bodies[mime_type] = text
-            if len(bodies) == 2:
-                break
         pending.extend((child, depth + 1) for child in reversed(part.get("parts", [])))
     return {
         "id": data["id"],
@@ -85,6 +113,7 @@ def mail_message(data: dict) -> dict:
         "subject": headers.get("subject", "(No subject)"),
         "body": bodies.get("text/plain", fallback),
         "html": bodies.get("text/html"),
+        "inlineImages": images if bodies.get("text/html") else {},
         "labelIds": data.get("labelIds", []),
     }
 

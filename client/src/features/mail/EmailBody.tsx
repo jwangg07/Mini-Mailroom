@@ -1,7 +1,11 @@
 import DOMPurify from 'dompurify'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { getInlineImages } from './api'
+import type { MailMessage } from './types'
 
-function previewDocument(html: string) {
+const noImages: MailMessage['inlineImages'] = {}
+
+function sanitizePreview(html: string) {
   const page = DOMPurify.sanitize(html, {
     WHOLE_DOCUMENT: true,
     RETURN_DOM: true,
@@ -9,8 +13,7 @@ function previewDocument(html: string) {
     FORBID_TAGS: ['base', 'meta', 'link', 'form', 'area', 'iframe', 'object', 'embed'],
     FORBID_ATTR: ['ping', 'download', 'attributionsrc', 'autofocus'],
   }) as Element | null
-  const head = page?.querySelector('head')
-  if (!page || !head) return null
+  if (!page?.querySelector('head')) return null
 
   for (const link of page.querySelectorAll('a[href]')) {
     if (/^https?:\/\//i.test(link.getAttribute('href') ?? '')) {
@@ -21,25 +24,109 @@ function previewDocument(html: string) {
     }
   }
 
+  const imageSources = Array.from(page.querySelectorAll('img[src], [srcset], [background], [style], style'))
+  const hasRemoteImages = imageSources.some((element) =>
+    Array.from(element.attributes).some(({ name, value }) =>
+      ['src', 'srcset', 'background', 'style'].includes(name) && /(?:https?:)?\/\//i.test(value),
+    ) || (element.tagName === 'STYLE' && /(?:https?:)?\/\//i.test(element.textContent ?? '')),
+  )
+  return { page, hasRemoteImages }
+}
+
+function contentId(source: string) {
+  const id = source.slice(4)
+  try {
+    return decodeURIComponent(id).replace(/^<|>$/g, '')
+  } catch {
+    return id
+  }
+}
+
+function previewDocument(
+  original: Element,
+  images: MailMessage['inlineImages'],
+  attachments: Record<string, string>,
+  showRemote: boolean,
+) {
+  const page = original.cloneNode(true) as Element
+  for (const image of page.querySelectorAll('img[src]')) {
+    const source = image.getAttribute('src') ?? ''
+    if (!/^cid:/i.test(source)) continue
+    const inline = images[contentId(source)]
+    const data = inline?.data ?? attachments[inline?.attachmentId ?? '']
+    image.removeAttribute('srcset')
+    if (inline && typeof data === 'string') {
+      const base64 = data.replaceAll('-', '+').replaceAll('_', '/')
+      image.setAttribute('src', `data:${inline.mimeType};base64,${base64}`)
+    } else {
+      image.removeAttribute('src')
+    }
+  }
+
   const policy = document.createElement('meta')
   policy.httpEquiv = 'Content-Security-Policy'
-  policy.content =
-    "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'"
-  head.prepend(policy)
+  policy.content = `default-src 'none'; style-src 'unsafe-inline'; img-src data:${showRemote ? ' https:' : ''}; form-action 'none'; base-uri 'none'`
+  const referrer = document.createElement('meta')
+  referrer.name = 'referrer'
+  referrer.content = 'no-referrer'
+  page.querySelector('head')?.prepend(policy, referrer)
   return '<!doctype html>' + page.outerHTML
 }
 
-export default function EmailBody({ html, text }: { html: string | null; text: string }) {
-  const preview = useMemo(() => (html ? previewDocument(html) : null), [html])
+export default function EmailBody({ message }: { message: MailMessage }) {
+  const { id, html, body, inlineImages = noImages } = message
+  const [showRemote, setShowRemote] = useState(false)
+  const [attachments, setAttachments] = useState<Record<string, string>>({})
+  const [unavailable, setUnavailable] = useState(false)
+  const parsed = useMemo(() => (html ? sanitizePreview(html) : null), [html])
+  const attachmentIds = useMemo(() => {
+    const referenced = new Set<string>()
+    for (const image of parsed?.page.querySelectorAll('img[src]') ?? []) {
+      const source = image.getAttribute('src') ?? ''
+      if (!/^cid:/i.test(source)) continue
+      const inline = inlineImages[contentId(source)]
+      if (inline?.attachmentId) referenced.add(inline.attachmentId)
+    }
+    return [...referenced]
+  }, [parsed, inlineImages])
+
+  useEffect(() => {
+    if (!attachmentIds.length) return
+    const controller = new AbortController()
+    void getInlineImages(id, attachmentIds, controller.signal).then(
+      (result) => {
+        if (controller.signal.aborted) return
+        setAttachments(result)
+        setUnavailable(attachmentIds.some((attachmentId) => !Object.hasOwn(result, attachmentId)))
+      },
+      () => {
+        if (!controller.signal.aborted) setUnavailable(true)
+      },
+    )
+    return () => controller.abort()
+  }, [id, attachmentIds])
+
+  const preview = useMemo(
+    () => parsed ? previewDocument(parsed.page, inlineImages, attachments, showRemote) : null,
+    [parsed, inlineImages, attachments, showRemote],
+  )
   return preview ? (
-    <iframe
-      className="message-html"
-      title="Email body"
-      sandbox="allow-popups allow-popups-to-escape-sandbox"
-      referrerPolicy="no-referrer"
-      srcDoc={preview}
-    />
+    <>
+      {parsed?.hasRemoteImages && !showRemote && (
+        <button className="secondary image-button" onClick={() => setShowRemote(true)}>
+          Load remote images
+        </button>
+      )}
+      {unavailable && <p className="note" role="status">Some embedded images are unavailable.</p>}
+      <iframe
+        className="message-html"
+        title="Email body"
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        srcDoc={preview}
+      />
+    </>
   ) : (
-    <pre>{text}</pre>
+    <pre>{body}</pre>
   )
 }

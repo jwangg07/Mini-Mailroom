@@ -30,7 +30,7 @@ export function getLabels(signal: AbortSignal): Promise<MailLabel[]> {
   return requestJson('/api/mail/labels', { signal }, mailRequestFailed)
 }
 
-function postMail<T>(path: string, body?: object): Promise<T> {
+function postMail<T>(path: string, body?: object, signal?: AbortSignal): Promise<T> {
   return requestJson<T>(
     path,
     {
@@ -40,8 +40,17 @@ function postMail<T>(path: string, body?: object): Promise<T> {
         'X-Mailroom-Request': '1',
       },
       body: JSON.stringify(body),
+      signal,
     },
     mailRequestFailed,
+  )
+}
+
+export function getInlineImages(id: string, attachmentIds: string[], signal: AbortSignal) {
+  return postMail<Record<string, string>>(
+    `/api/mail/messages/${encodeURIComponent(id)}/inline-images`,
+    { attachment_ids: attachmentIds },
+    signal,
   )
 }
 

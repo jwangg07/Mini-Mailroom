@@ -91,7 +91,7 @@ def configure_http(app: FastAPI, *, production: bool = False) -> None:
         # The sandboxed mail preview inherits this policy and uses inline email CSS.
         # Development docs/Vite need their own script policy; framing stays denied.
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
             "connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; "
             "frame-ancestors 'none'; form-action 'self'"
             if production

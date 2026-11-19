@@ -1,6 +1,21 @@
 """Validation for mail HTTP requests."""
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from typing import Annotated
+
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator
+
+from app.mail.formatting import MAX_INLINE_IMAGES
+
+
+class InlineImageRequest(BaseModel):
+    attachment_ids: list[
+        Annotated[
+            str,
+            StringConstraints(
+                min_length=1, max_length=2048, pattern=r"^[A-Za-z0-9_=-]+$"
+            ),
+        ]
+    ] = Field(min_length=1, max_length=MAX_INLINE_IMAGES)
 
 
 class MailLabelChange(BaseModel):

@@ -313,6 +313,88 @@ def test_mailbox_labels_and_trash(setup, monkeypatch):
     assert trash.kwargs["params"] == {"fields": "id"}
 
 
+def test_message_includes_cid_images_with_data_or_attachment_reference(setup):
+    _, _, service, session = setup
+    session.request.return_value = provider_response(
+        {
+            "id": "abc",
+            "payload": {
+                "mimeType": "multipart/related",
+                "parts": [
+                    {
+                        "mimeType": "text/html",
+                        "body": {
+                            "data": base64.urlsafe_b64encode(
+                                b'<img src="cid:logo"><img src="cid:photo">'
+                            ).decode()
+                        },
+                    },
+                    {"mimeType": "text/plain", "body": {"data": "VGV4dA"}},
+                    {
+                        "mimeType": "image/png",
+                        "filename": "logo.png",
+                        "headers": [{"name": "Content-ID", "value": "<logo>"}],
+                        "body": {"data": "YWJj", "size": 3},
+                    },
+                    {
+                        "mimeType": "image/jpeg",
+                        "filename": "photo.jpg",
+                        "headers": [{"name": "Content-ID", "value": "<photo>"}],
+                        "body": {"attachmentId": "photo-id", "size": 1200},
+                    },
+                    {
+                        "mimeType": "image/png",
+                        "filename": "ordinary-attachment.png",
+                        "body": {"attachmentId": "other-id", "size": 200},
+                    },
+                ],
+            },
+        }
+    )
+
+    message = service.message("alice", "abc")
+
+    assert message["inlineImages"] == {
+        "logo": {"mimeType": "image/png", "data": "YWJj"},
+        "photo": {"mimeType": "image/jpeg", "attachmentId": "photo-id"},
+    }
+    session.request.assert_called_once()
+
+
+def test_inline_images_batch_checks_session_and_reuses_credentials(setup, monkeypatch):
+    store, vault, _, gmail = setup
+    store.save_session(
+        "session",
+        Session({"id": "alice", "email": "alice@example.com"}, int(time.time()) + 600),
+    )
+    monkeypatch.setattr("app.application.CredentialVault", lambda *_: vault)
+    credential_read = Mock(wraps=store.read_credentials)
+    monkeypatch.setattr(store, "read_credentials", credential_read)
+
+    def fetch(method, url, **kwargs):
+        assert method == "GET"
+        assert "/messages/abc/attachments/" in url
+        if url.endswith("/missing"):
+            return Mock(status_code=404)
+        return provider_response({"data": "YWJj"})
+
+    gmail.request.side_effect = fetch
+    path = "/api/mail/messages/abc/inline-images"
+    payload = {"attachment_ids": ["image-id", "image-id", "missing"]}
+    headers = {"X-Mailroom-Request": "1"}
+    with TestClient(create_app(Settings(_env_file=None), store=store)) as client:
+        assert client.post(path, json=payload, headers=headers).status_code == 401
+        client.cookies.set(SESSION_COOKIE, "session")
+        assert client.post(path, json=payload).status_code == 403
+        response = client.post(path, json=payload, headers=headers)
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.json() == {"image-id": "YWJj"}
+
+    credential_read.assert_called_once_with("alice")
+    assert gmail.request.call_count == 2
+
+
 def test_inbox_loads_and_decrypts_credentials_once_per_page(setup, monkeypatch):
     store, vault, service, session = setup
     read_credentials = Mock(wraps=store.read_credentials)

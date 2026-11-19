@@ -18,6 +18,42 @@ export default function AccountPanel({
   error,
   signOut,
 }: AccountPanelProps) {
+  if (user) {
+    return (
+      <header className="account-bar">
+        <div className="mailroom-brand">
+          <span className="mail-mark" aria-hidden="true">✉︎</span>
+          <h1>Mini Mailroom</h1>
+        </div>
+        <details className="account-menu">
+          <summary>
+            <span className="account-avatar" aria-hidden="true">
+              {(user.name || user.email).trim().charAt(0).toUpperCase()}
+            </span>
+            <span className="account-address">{user.email}</span>
+            <span className="sr-only"> Account menu</span>
+          </summary>
+          <div className="account-popover">
+            <strong>{user.name}</strong>
+            <p className="email">{user.email}</p>
+            <button
+              className="secondary"
+              onClick={() => void signOut()}
+              disabled={signingOut}
+            >
+              {signingOut ? 'Signing out…' : 'Sign out'}
+            </button>
+            <p className="note">
+              Signing out disconnects Gmail and ends your app sessions on other devices.
+            </p>
+          </div>
+        </details>
+        {error && <p className="error account-message" role="alert">{error}</p>}
+        {notice && <p className="note account-message" role="status">{notice}</p>}
+      </header>
+    )
+  }
+
   return (
     <section className="welcome" aria-labelledby="welcome-title">
       <div className="mail-mark" aria-hidden="true">
@@ -36,23 +72,6 @@ export default function AccountPanel({
       {notice && <p className="note" role="status">{notice}</p>}
       {loading ? (
         <p role="status">Checking your account…</p>
-      ) : user ? (
-        <div className="account">
-          <span className="status">Signed in</span>
-          <h2>Welcome, {user.name}</h2>
-          <p className="email">{user.email}</p>
-          <button
-            className="secondary"
-            onClick={() => void signOut()}
-            disabled={signingOut}
-          >
-            {signingOut ? 'Signing out…' : 'Sign out'}
-          </button>
-          <p className="note">
-            Signing out also disconnects Gmail and signs you out on other devices.
-            Your emails stay in Gmail. You will need to reconnect next time.
-          </p>
-        </div>
       ) : (
         <>
           <a className="google-button" href="/auth/google/login">

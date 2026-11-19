@@ -3,8 +3,15 @@
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
+from fastapi import HTTPException
+
 from app.mail.credentials import MODIFY_SCOPES
-from app.mail.formatting import encode_draft, mail_message, mail_summary
+from app.mail.formatting import (
+    MAX_INLINE_IMAGE_DATA,
+    encode_draft,
+    mail_message,
+    mail_summary,
+)
 from app.mail.gmail_client import GmailClient
 
 
@@ -45,6 +52,35 @@ class GmailService:
             params={"format": "full"},
         )
         return mail_message(data)
+
+    def inline_images(
+        self, user_id: str, message_id: str, attachment_ids: list[str]
+    ) -> dict[str, str]:
+        request = self.client.for_requests(user_id, "GET").request
+        path = "/messages/" + quote(message_id, safe="") + "/attachments/"
+
+        def fetch(attachment_id: str) -> str:
+            try:
+                data = request(path + quote(attachment_id, safe="")).get("data", "")
+            except HTTPException as exc:
+                if exc.status_code in (404, 413):
+                    return ""
+                raise
+            return (
+                data
+                if isinstance(data, str) and len(data) <= MAX_INLINE_IMAGE_DATA
+                else ""
+            )
+
+        ids = list(dict.fromkeys(attachment_ids))
+        images = {}
+        remaining = 2_000_000
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for attachment_id, data in zip(ids, pool.map(fetch, ids)):
+                if data and len(data) <= remaining:
+                    images[attachment_id] = data
+                    remaining -= len(data)
+        return images
 
     def labels(self, user_id: str) -> list[dict]:
         data = self.client.request(
