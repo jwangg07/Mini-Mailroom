@@ -6,6 +6,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from email import policy
 from email.parser import BytesParser
+from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -248,6 +249,61 @@ def test_read_plain_text_not_html_and_list_pagination(setup):
     page = service.inbox("alice", "older")
     assert page["nextPageToken"] == "next" and page["messages"][0]["unread"]
     assert session.request.call_args_list[-2].kwargs["params"]["pageToken"] == "older"
+
+
+def test_inbox_loads_and_decrypts_credentials_once_per_page(setup, monkeypatch):
+    store, vault, service, session = setup
+    read_credentials = Mock(wraps=store.read_credentials)
+    decrypt = Mock(wraps=vault.decrypt)
+    monkeypatch.setattr(store, "read_credentials", read_credentials)
+    monkeypatch.setattr(vault, "decrypt", decrypt)
+    ids = [str(index) for index in range(20)]
+
+    def fetch(method, url, **kwargs):
+        if url.endswith("/messages"):
+            return provider_response({"messages": [{"id": id_} for id_ in ids]})
+        return provider_response({"id": url.rsplit("/", 1)[-1]})
+
+    session.request.side_effect = fetch
+
+    for page_number in (1, 2):
+        page = service.inbox("alice")
+        assert [message["id"] for message in page["messages"]] == ids
+        assert session.request.call_count == 21 * page_number
+        assert read_credentials.call_count == decrypt.call_count == page_number
+
+
+def test_inbox_workers_share_recovery_after_gmail_rejects_token(setup, monkeypatch):
+    _, _, service, session = setup
+    workers = Barrier(5, timeout=5)
+
+    def fetch(method, url, *, headers, **kwargs):
+        if url.endswith("/messages"):
+            return provider_response(
+                {"messages": [{"id": str(index)} for index in range(5)]}
+            )
+        if headers["Authorization"] == "Bearer access-secret":
+            workers.wait()
+            return Mock(status_code=401)
+        assert headers["Authorization"] == "Bearer renewed"
+        return provider_response({"id": url.rsplit("/", 1)[-1]})
+
+    def refresh(credentials, request):
+        credentials.token = "renewed"
+        credentials.expiry = datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=1)
+
+    refresh_call = Mock(side_effect=refresh)
+    monkeypatch.setattr(
+        "app.mail.credentials.Credentials.refresh",
+        lambda self, request: refresh_call(self, request),
+    )
+    session.request.side_effect = fetch
+
+    page = service.inbox("alice")
+
+    assert [message["id"] for message in page["messages"]] == ["0", "1", "2", "3", "4"]
+    assert session.request.call_count == 11
+    refresh_call.assert_called_once()
 
 
 def test_mail_routes_authenticate_scope_user_and_protect_send(monkeypatch):

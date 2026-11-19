@@ -1,11 +1,14 @@
 """Authenticated Gmail HTTP requests and provider error translation."""
 
 import json
+from concurrent.futures import Future
 from datetime import UTC, datetime
+from threading import Lock
 
 import requests
 from fastapi import HTTPException
 
+from app.auth.store import AuthStoreError
 from app.mail.credentials import READ_SCOPES, SEND_SCOPES, GmailCredentials, reconnect
 
 GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
@@ -16,11 +19,26 @@ class GmailClient:
     def __init__(self, credentials: GmailCredentials):
         self.credentials = credentials
 
-    def request(
-        self, user_id: str, method: str, path: str, *, _retry: bool = False, **kwargs
-    ) -> dict:
-        encrypted, data = self.credentials.load(user_id)
-        needed = READ_SCOPES if method == "GET" else SEND_SCOPES
+    def request(self, user_id: str, method: str, path: str, **kwargs) -> dict:
+        return self.for_requests(user_id, method).request(path, **kwargs)
+
+    def for_requests(self, user_id: str, method: str) -> "_GmailRequests":
+        return _GmailRequests(self.credentials, user_id, method)
+
+
+class _GmailRequests:
+    """Credentials for the Gmail calls made by one app request."""
+
+    def __init__(self, credentials: GmailCredentials, user_id: str, method: str):
+        self.credentials = credentials
+        self.user_id = user_id
+        self.method = method
+        self._recovery_lock = Lock()
+        self._recovery: Future[str] = Future()
+        self._token = self._authorize(*credentials.load(user_id))
+
+    def _authorize(self, encrypted: str, data: dict, *, force: bool = False) -> str:
+        needed = READ_SCOPES if self.method == "GET" else SEND_SCOPES
         if not needed.intersection(data["scopes"]):
             raise reconnect()
         expiry = (
@@ -28,17 +46,42 @@ class GmailClient:
             if data.get("expiry")
             else 0
         )
-        if not data.get("token") or expiry <= datetime.now(UTC).timestamp() + 60:
-            data = self.credentials.refresh(user_id, encrypted, data)
+        if (
+            force
+            or not data.get("token")
+            or expiry <= datetime.now(UTC).timestamp() + 60
+        ):
+            data = self.credentials.refresh(self.user_id, encrypted, data)
         if not needed.intersection(data["scopes"]):
             raise reconnect()
+        return data["token"]
+
+    def _recover(self) -> str:
+        with self._recovery_lock:
+            if not self._recovery.done():
+                try:
+                    # Another app request may already have refreshed or disconnected.
+                    encrypted, latest = self.credentials.load(self.user_id)
+                    token = self._authorize(
+                        encrypted, latest, force=latest.get("token") == self._token
+                    )
+                except (HTTPException, AuthStoreError) as exc:
+                    self._recovery.set_exception(exc)
+                else:
+                    self._recovery.set_result(token)
+        return self._recovery.result()
+
+    def request(self, path: str, *, _retry: bool = False, **kwargs) -> dict:
+        recovered = _retry or self._recovery.done()
+        token = self._recover() if recovered else self._token
+        method = self.method
         try:
             # No automatic transport retries: a timed-out send might have succeeded.
             with requests.Session() as session:
                 response = session.request(
                     method,
                     GMAIL + path,
-                    headers={"Authorization": "Bearer " + data["token"]},
+                    headers={"Authorization": "Bearer " + token},
                     timeout=20,
                     stream=True,
                     allow_redirects=False,
@@ -66,13 +109,10 @@ class GmailClient:
             )
             raise HTTPException(503, detail) from None
         if response.status_code == 401:
-            if _retry:
+            if recovered:
                 raise reconnect()
             # Google rejected this request before processing it. Refresh and retry once.
-            current, latest = self.credentials.load(user_id)
-            if latest.get("token") == data.get("token"):
-                self.credentials.refresh(user_id, current, latest)
-            return self.request(user_id, method, path, _retry=True, **kwargs)
+            return self.request(path, _retry=True, **kwargs)
         if response.status_code == 403:
             raise HTTPException(
                 403,

@@ -12,9 +12,8 @@ class GmailService:
         self.client = client
 
     def inbox(self, user_id: str, page_token: str = "") -> dict:
-        page = self.client.request(
-            user_id,
-            "GET",
+        request = self.client.for_requests(user_id, "GET").request
+        page = request(
             "/messages",
             params={
                 "labelIds": "INBOX",
@@ -24,9 +23,7 @@ class GmailService:
         )
 
         def summary(item):
-            message = self.client.request(
-                user_id,
-                "GET",
+            message = request(
                 "/messages/" + quote(item["id"], safe=""),
                 params={
                     "format": "metadata",
