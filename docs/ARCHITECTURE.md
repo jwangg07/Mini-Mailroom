@@ -64,7 +64,14 @@ hooks own their state and requests. Only `application.py` assembles backend obje
 5. `Mailbox.openMessage()` aborts any previous message request before loading
    `/api/mail/messages/{id}`. The backend selects HTML and plain text from Gmail's
    structured message, skips attachments, and limits response bytes and nesting.
-   `EmailBody` sanitizes HTML and displays it in a sandboxed frame.
+   [`EmailBody`](../client/src/features/mail/EmailBody.tsx) sanitizes HTML and
+   displays it in a sandboxed frame. Its image policy allows HTTPS and `data:`
+   sources. Automatic loading previously left `http://` image URLs as written,
+   so images such as icons and illustrations on a sender's CDN were blocked.
+   The preview now rewrites `http://` URLs in `<img src>` to `https://` before
+   rendering. The browser requests the same resource over HTTPS without a
+   referrer. If the host cannot serve the image over HTTPS, the image stays
+   unavailable.
 
 ## Send email
 

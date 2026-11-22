@@ -44,6 +44,11 @@ function previewDocument(
   const page = original.cloneNode(true) as Element
   for (const image of page.querySelectorAll('img[src]')) {
     const source = image.getAttribute('src') ?? ''
+    const secureSource = source.replace(/^\s*http:\/\//i, 'https://')
+    if (secureSource !== source) {
+      image.setAttribute('src', secureSource)
+      continue
+    }
     if (!/^cid:/i.test(source)) continue
     const inline = images[contentId(source)]
     const data = inline?.data ?? attachments[inline?.attachmentId ?? '']
