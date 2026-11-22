@@ -162,8 +162,8 @@ needed. The browser holds only an opaque HttpOnly, SameSite session cookie.
 
 Sessions last eight hours and persist across backend instances when DynamoDB is
 configured. Inbox lists use 20 messages per page. Opening a message shows its HTML
-in a sandboxed preview or displays its plain text. Embedded images load in the
-preview. Use **Load remote images** to fetch external images for that message.
+in a sandboxed preview or displays its plain text. Embedded images and remote
+images served over HTTPS load automatically in the preview.
 Sending supports one recipient and a plain-text body. Attachment downloads and
 search remain future work. The single Sign out
 action revokes the Google grant,

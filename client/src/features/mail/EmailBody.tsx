@@ -24,13 +24,7 @@ function sanitizePreview(html: string) {
     }
   }
 
-  const imageSources = Array.from(page.querySelectorAll('img[src], [srcset], [background], [style], style'))
-  const hasRemoteImages = imageSources.some((element) =>
-    Array.from(element.attributes).some(({ name, value }) =>
-      ['src', 'srcset', 'background', 'style'].includes(name) && /(?:https?:)?\/\//i.test(value),
-    ) || (element.tagName === 'STYLE' && /(?:https?:)?\/\//i.test(element.textContent ?? '')),
-  )
-  return { page, hasRemoteImages }
+  return page
 }
 
 function contentId(source: string) {
@@ -46,7 +40,6 @@ function previewDocument(
   original: Element,
   images: MailMessage['inlineImages'],
   attachments: Record<string, string>,
-  showRemote: boolean,
 ) {
   const page = original.cloneNode(true) as Element
   for (const image of page.querySelectorAll('img[src]')) {
@@ -65,7 +58,7 @@ function previewDocument(
 
   const policy = document.createElement('meta')
   policy.httpEquiv = 'Content-Security-Policy'
-  policy.content = `default-src 'none'; style-src 'unsafe-inline'; img-src data:${showRemote ? ' https:' : ''}; form-action 'none'; base-uri 'none'`
+  policy.content = "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; form-action 'none'; base-uri 'none'"
   const referrer = document.createElement('meta')
   referrer.name = 'referrer'
   referrer.content = 'no-referrer'
@@ -75,13 +68,12 @@ function previewDocument(
 
 export default function EmailBody({ message }: { message: MailMessage }) {
   const { id, html, body, inlineImages = noImages } = message
-  const [showRemote, setShowRemote] = useState(false)
   const [attachments, setAttachments] = useState<Record<string, string>>({})
   const [unavailable, setUnavailable] = useState(false)
   const parsed = useMemo(() => (html ? sanitizePreview(html) : null), [html])
   const attachmentIds = useMemo(() => {
     const referenced = new Set<string>()
-    for (const image of parsed?.page.querySelectorAll('img[src]') ?? []) {
+    for (const image of parsed?.querySelectorAll('img[src]') ?? []) {
       const source = image.getAttribute('src') ?? ''
       if (!/^cid:/i.test(source)) continue
       const inline = inlineImages[contentId(source)]
@@ -107,16 +99,11 @@ export default function EmailBody({ message }: { message: MailMessage }) {
   }, [id, attachmentIds])
 
   const preview = useMemo(
-    () => parsed ? previewDocument(parsed.page, inlineImages, attachments, showRemote) : null,
-    [parsed, inlineImages, attachments, showRemote],
+    () => parsed ? previewDocument(parsed, inlineImages, attachments) : null,
+    [parsed, inlineImages, attachments],
   )
   return preview ? (
     <>
-      {parsed?.hasRemoteImages && !showRemote && (
-        <button className="secondary image-button" onClick={() => setShowRemote(true)}>
-          Load remote images
-        </button>
-      )}
       {unavailable && <p className="note" role="status">Some embedded images are unavailable.</p>}
       <iframe
         className="message-html"
