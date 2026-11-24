@@ -173,6 +173,34 @@
   background: #fff;
 }
 
+.assistant-answer > * {
+  margin: 0;
+}
+
+.assistant-answer > * + * {
+  margin-top: 8px;
+}
+
+.assistant-answer :is(ul, ol) {
+  padding-left: 1.4em;
+}
+
+.assistant-answer :is(h1, h2, h3, h4, h5, h6) {
+  font: inherit;
+  font-weight: 700;
+}
+
+.assistant-answer pre {
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: #f0f3ed;
+}
+
+.assistant-answer a {
+  color: #315d43;
+}
+
 .assistant-action {
   display: grid;
   justify-items: start;
@@ -206,7 +234,7 @@
   gap: 3px;
 }
 
-.assistant-send-review input {
+.assistant-send-review :is(input, textarea) {
   width: 100%;
   padding: 6px 8px;
   border: 1px solid #ccd8c9;
@@ -217,13 +245,10 @@
   font-size: 16px;
 }
 
-.assistant-draft-body {
+.assistant-send-review textarea {
+  min-height: 5rem;
   max-height: 15rem;
-  overflow: auto;
-  padding: 8px;
-  border: 1px solid #d7e0d3;
-  border-radius: 6px;
-  background: white;
+  resize: vertical;
 }
 
 .assistant-label {

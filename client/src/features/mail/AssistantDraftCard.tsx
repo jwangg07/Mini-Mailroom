@@ -15,7 +15,8 @@ type AssistantDraftCardProps = {
   sending: boolean
   onReview: () => void
   onCancel: () => void
-  onSend: (draft: MailDraft) => void
+  onEdit: (draft: MailDraft) => void
+  onSend: () => void
   onUseDraft: () => void
 }
 
@@ -26,33 +27,62 @@ export default function AssistantDraftCard({
   sending,
   onReview,
   onCancel,
+  onEdit,
   onSend,
   onUseDraft,
 }: AssistantDraftCardProps) {
+  const reviewForm = useRef<HTMLFormElement>(null)
   const recipient = useRef<HTMLInputElement>(null)
   const status = delivery?.status
   const to = delivery && 'to' in delivery ? delivery.to : draft.to
 
   useEffect(() => {
-    if (reviewing) recipient.current?.focus()
+    if (reviewing) {
+      reviewForm.current?.scrollIntoView({ block: 'nearest' })
+      recipient.current?.focus({ preventScroll: true })
+    }
   }, [reviewing])
 
   function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const to = new FormData(event.currentTarget).get('to')
-    if (typeof to === 'string' && to.trim()) onSend({ ...draft, to: to.trim() })
+    onSend()
   }
 
   return (
     <div className="assistant-action">
-      <strong>{draft.subject || '(No subject)'}</strong>
       {reviewing ? (
-        <form className="assistant-send-review" onSubmit={send} aria-label="Review email before sending">
+        <form ref={reviewForm} className="assistant-send-review" onSubmit={send} aria-label="Review email before sending">
           <label>
             To
-            <input ref={recipient} name="to" type="email" required defaultValue={draft.to} readOnly={sending} />
+            <input
+              ref={recipient}
+              type="email"
+              required
+              value={draft.to}
+              onChange={(event) => onEdit({ ...draft, to: event.target.value })}
+              readOnly={sending}
+            />
           </label>
-          <p className="assistant-draft-body">{draft.body}</p>
+          <label>
+            Subject
+            <input
+              value={draft.subject}
+              maxLength={998}
+              onChange={(event) => onEdit({ ...draft, subject: event.target.value })}
+              readOnly={sending}
+            />
+          </label>
+          <label>
+            Message body
+            <textarea
+              value={draft.body}
+              rows={5}
+              required
+              maxLength={100000}
+              onChange={(event) => onEdit({ ...draft, body: event.target.value })}
+              readOnly={sending}
+            />
+          </label>
           <div className="assistant-action-buttons">
             <button className="assistant-send" type="submit" disabled={sending}>
               {status === 'sending' ? 'Sending…' : 'Send email'}
@@ -64,6 +94,7 @@ export default function AssistantDraftCard({
         </form>
       ) : (
         <>
+          <strong>{draft.subject || '(No subject)'}</strong>
           {to && <small>To {to}</small>}
           <details>
             <summary>Preview draft</summary>
@@ -81,6 +112,7 @@ export default function AssistantDraftCard({
           )}
         </>
       )}
+      {status === 'sending' && !reviewing && <p role="status">Sending…</p>}
       {status === 'sent' && <p role="status">Email sent.</p>}
       {status === 'compose' && <p role="status">Opened in Compose.</p>}
       {(delivery?.status === 'rejected' || delivery?.status === 'uncertain') && (

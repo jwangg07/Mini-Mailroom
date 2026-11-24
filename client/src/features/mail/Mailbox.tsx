@@ -89,7 +89,10 @@ export default function Mailbox() {
     action: 'trash' | { id: string; applied: boolean },
     reportError: (message: string) => void = setError,
   ) {
-    if (!selected || updatePending.current) return
+    if (!selected || updatePending.current) {
+      reportError('Finish the current mailbox update and try again.')
+      return false
+    }
     updatePending.current = true
     setUpdating(true)
     setError('')
@@ -104,12 +107,14 @@ export default function Mailbox() {
           action.id,
           action.applied,
         )
-        setSelected({ ...selected, labelIds })
+        setSelected((current) => current?.id === selected.id ? { ...current, labelIds } : current)
       }
+      return true
     } catch (reason) {
       reportError(
         reason instanceof Error ? reason.message : 'Could not update message.',
       )
+      return false
     } finally {
       updatePending.current = false
       setUpdating(false)
@@ -180,6 +185,7 @@ export default function Mailbox() {
       <AssistantChat
         open={assistantOpen}
         selected={selected}
+        labels={labels}
         updating={updating}
         onClose={() => {
           setAssistantOpen(false)
@@ -191,10 +197,12 @@ export default function Mailbox() {
           setComposing(true)
           return true
         }}
-        onApplyLabel={(messageId, labelId, reportError) => {
+        onChangeLabel={(messageId, labelId, applied, reportError) => {
           if (selected?.id === messageId) {
-            void updateMessage({ id: labelId, applied: true }, reportError)
+            return updateMessage({ id: labelId, applied }, reportError)
           }
+          reportError('Open the email you want to update first.')
+          return Promise.resolve(false)
         }}
         onOpenMessage={openMessage}
       />

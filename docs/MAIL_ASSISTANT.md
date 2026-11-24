@@ -6,10 +6,15 @@ the assistant read that specific message. Clear the checkbox to ask about the
 mailbox. The chat stays in the current page and sends the four most recent
 exchanges with each follow-up.
 
-Choose **Review and send** on a draft card or type **send it** to review the
-latest draft. Check the recipient, subject, and message, then click **Send
-email**. Choose **Open in compose** to edit the subject or body before sending.
-For a Gmail label suggested for an open message, choose **Apply label**.
+Type **send** or **send it** to send the draft you are reviewing, or the latest
+draft in the chat. Choose **Review and send** to edit the recipient, subject,
+and message body in chat. Click **Send email** or type **send** to deliver your
+edited version.
+
+With **Use open email** selected, type **apply label Work** or **remove label
+Work**, using the name of an existing Gmail label. You can also choose
+**Apply label** on a suggestion. Confirmed sends and label changes are
+reported in chat. Assistant replies render Markdown.
 
 The FastAPI route checks the session and request origin and uses the shared
 DynamoDB rate limiter in production. The Groq agent discovers tools through an
@@ -89,10 +94,10 @@ after the cache expires reads the current secret value.
 
 Open the app at its Function URL and sign in to the test mailbox. Open a test
 email and click **Assistant**. Try **Summarize** and send the prompt. Check that
-the response describes that email. Then try **Draft reply**, type **send it**,
-and send a test email to an account you control. Verify the delivery in Gmail.
-Try **Suggest labels** with an existing Gmail label and apply the suggestion to
-the test email.
+the response describes that email. Draft a test email addressed to an account
+you control, edit the message in **Review and send**, then type **send it**.
+Verify the delivery in Gmail. With the test email open, try **apply label Work**
+and **remove label Work** using an existing label.
 
 To check the API directly, run this in the developer console on the signed-in
 app page. The current session cookie goes with the same-origin request. The

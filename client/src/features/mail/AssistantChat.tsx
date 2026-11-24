@@ -1,23 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import Markdown from 'react-markdown'
+import type { Components } from 'react-markdown'
 import { HttpError } from '../../lib/http'
-import { askAssistant, sendMail } from './api'
+import { askAssistant, getLabels, sendMail } from './api'
 import AssistantDraftCard from './AssistantDraftCard'
 import type { DraftDelivery } from './AssistantDraftCard'
-import type { AssistantReply, MailDraft, MailMessage } from './types'
+import { labelCommand, sendCommand } from './assistantCommands'
+import type { LabelCommand } from './assistantCommands'
+import type { AssistantReply, MailDraft, MailLabel, MailMessage } from './types'
 import './assistant.css'
 
 type Question = { prompt: string; context: string }
-type Exchange = Question & { reply: AssistantReply }
+type Exchange = Question & { reply: AssistantReply; receipt?: boolean }
 type ReportError = (message: string) => void
 
 type AssistantChatProps = {
   open: boolean
   selected: MailMessage | null
+  labels: MailLabel[] | null
   updating: boolean
   onClose: () => void
   onUseDraft: (draft: MailDraft) => boolean
-  onApplyLabel: (messageId: string, labelId: string, reportError: ReportError) => void
+  onChangeLabel: (messageId: string, labelId: string, applied: boolean, reportError: ReportError) => Promise<boolean>
   onOpenMessage: (messageId: string, reportError: ReportError) => Promise<void>
 }
 
@@ -31,10 +36,17 @@ const messagePrompts = [
   { label: 'Summarize', text: 'Summarize this email, including any requests or deadlines.' },
   { label: 'Draft reply', text: 'Draft a concise reply to this email.' },
   { label: 'Suggest labels', text: 'Which of my existing Gmail labels would fit this email?' },
+  { label: 'Label email', text: 'Apply label ' },
 ]
 
-const sendCommand = /^(?:yes[, ]+)?(?:please\s+)?send(?:\s+(?:it|this|that|(?:the|this|that)\s+(?:draft|email|message)))?(?:\s+now)?[.!]?$/i
 const uncertainDelivery = 'Send result unknown. Check Sent in Gmail before sending again.'
+const markdownComponents: Components = {
+  a: ({ children, href }) => href
+    ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+    : <span>{children}</span>,
+  // Assistant text may include image URLs copied from an email.
+  img: ({ alt }) => alt ? <span>{alt}</span> : null,
+}
 
 function latestDraftId(turns: Exchange[]): string | undefined {
   const turnIndex = turns.findLastIndex(({ reply }) => reply.actions?.some(({ kind }) => kind === 'draft'))
@@ -55,10 +67,11 @@ function historyAnswer(reply: AssistantReply): string {
 export default function AssistantChat({
   open,
   selected,
+  labels,
   updating,
   onClose,
   onUseDraft,
-  onApplyLabel,
+  onChangeLabel,
   onOpenMessage,
 }: AssistantChatProps) {
   const [includeMessage, setIncludeMessage] = useState(true)
@@ -67,16 +80,18 @@ export default function AssistantChat({
   const [pending, setPending] = useState<Question | null>(null)
   const [error, setError] = useState('')
   const [reviewId, setReviewId] = useState<string | null>(null)
+  const [editedDrafts, setEditedDrafts] = useState<Record<string, MailDraft>>({})
   const [deliveries, setDeliveries] = useState<Record<string, DraftDelivery>>({})
+  const [changingLabel, setChangingLabel] = useState(false)
   const currentDeliveries = useRef(deliveries)
-  const sendingDraft = useRef(false)
+  const writingMail = useRef(false)
   const request = useRef<AbortController | null>(null)
   const promptField = useRef<HTMLTextAreaElement>(null)
   const transcript = useRef<HTMLDivElement>(null)
   const message = includeMessage ? selected : null
   const context = message ? message.subject || '(No subject)' : 'Inbox'
   const prompts = message ? messagePrompts : inboxPrompts
-  const sending = Object.values(deliveries).some(({ status }) => status === 'sending')
+  const busy = changingLabel || Object.values(deliveries).some(({ status }) => status === 'sending')
 
   useEffect(() => () => request.current?.abort(), [])
 
@@ -87,7 +102,7 @@ export default function AssistantChat({
   useEffect(() => {
     const log = transcript.current
     if (open && log) log.scrollTop = log.scrollHeight
-  }, [open, turns, pending, error])
+  }, [open, turns, pending, error, changingLabel])
 
   function cancel() {
     request.current?.abort()
@@ -97,12 +112,13 @@ export default function AssistantChat({
   }
 
   function reset() {
-    if (sendingDraft.current) return
+    if (writingMail.current) return
     cancel()
     setTurns([])
     setInput('')
     setError('')
     setReviewId(null)
+    setEditedDrafts({})
     currentDeliveries.current = {}
     setDeliveries(currentDeliveries.current)
     promptField.current?.focus()
@@ -113,57 +129,121 @@ export default function AssistantChat({
     setDeliveries(currentDeliveries.current)
   }
 
-  function reviewDraft(id = latestDraftId(turns)) {
-    const delivery = id ? currentDeliveries.current[id] : undefined
-    if (!id) setError('Ask the assistant to draft an email first.')
-    else if (delivery?.status === 'sent') setError('That email was already sent.')
-    else if (delivery?.status === 'compose') setError('Use Compose to send that draft.')
-    else if (delivery?.status === 'uncertain') setError(delivery.message)
-    else {
-      setError('')
-      setReviewId(id)
+  function getDraft(id: string): MailDraft | undefined {
+    if (editedDrafts[id]) return editedDrafts[id]
+    const [turnIndex, actionIndex] = id.split(':').map(Number)
+    const action = turns[turnIndex]?.reply.actions?.[actionIndex]
+    if (action?.kind === 'draft') {
+      return { to: action.to ?? '', subject: action.subject, body: action.body }
     }
   }
 
-  async function sendDraft(id: string, draft: MailDraft) {
+  function addReply(question: Question, answer: string) {
+    setTurns((previous) => [...previous, { ...question, reply: { answer }, receipt: true }])
+  }
+
+  async function sendDraft(id: string | undefined, question?: Question) {
+    if (writingMail.current) return
+    const current = id ? getDraft(id) : undefined
+    if (!id || !current) {
+      setError('Ask the assistant to draft an email first.')
+      return
+    }
     const delivery = currentDeliveries.current[id]
-    if (sendingDraft.current || reviewId !== id || (delivery && delivery.status !== 'rejected')) return
-    sendingDraft.current = true
+    if (delivery?.status === 'sent') return setError('That email was already sent.')
+    if (delivery?.status === 'compose') return setError('Use Compose to send that draft.')
+    if (delivery?.status === 'uncertain') return setError(delivery.message)
+    if (delivery?.status === 'sending') return
+    const draft = { ...current, to: current.to.trim() }
+    if (!draft.to || !draft.body.trim()) {
+      setReviewId(id)
+      setDelivery(id, { status: 'rejected', message: 'Enter a recipient and a message body.' })
+      return
+    }
+    writingMail.current = true
     setDelivery(id, { status: 'sending' })
     try {
       await sendMail(draft)
       setDelivery(id, { status: 'sent', to: draft.to })
       setReviewId(null)
+      if (question) addReply(question, `Email sent to ${draft.to}.`)
     } catch (reason) {
       if (reason instanceof HttpError && reason.status >= 400 && reason.status < 500 && reason.status !== 408) {
-        setDelivery(id, { status: 'rejected', message: reason.message })
+        setReviewId(id)
+        setDelivery(id, {
+          status: 'rejected',
+          message: reason.status === 422 ? 'Check the recipient address, subject, and message body.' : reason.message,
+        })
       } else {
         setDelivery(id, { status: 'uncertain', to: draft.to, message: uncertainDelivery })
         setReviewId(null)
       }
     } finally {
-      sendingDraft.current = false
+      writingMail.current = false
+    }
+  }
+
+  async function changeOpenEmailLabel(command: LabelCommand, question: Question) {
+    if (!message) {
+      setError('Open the email you want to label and select Use open email.')
+      return
+    }
+    writingMail.current = true
+    setChangingLabel(true)
+    try {
+      const available = labels ?? await getLabels(AbortSignal.timeout(10_000))
+      const name = command.name
+      const suggestion = name === null
+        ? turns.flatMap(({ reply }) => reply.actions ?? []).findLast(
+          (action) => action.kind === 'label' && action.message_id === message.id,
+        )
+        : undefined
+      const matching = name === null ? [] : available.filter(
+        (label) => label.name.toLowerCase() === name.toLowerCase(),
+      )
+      const label = suggestion?.kind === 'label'
+        ? available.find(({ id }) => id === suggestion.label_id)
+        : matching.find((label) => label.name === name) ?? (matching.length === 1 ? matching[0] : undefined)
+      if (!label) {
+        setError(name === null
+          ? 'Name the label you want to change on this email.'
+          : `Use the exact name of an existing Gmail label. “${name}” could not be matched.`)
+        return
+      }
+      const applied = command.applied
+      if (await onChangeLabel(message.id, label.id, applied, setError)) {
+        addReply(question, applied ? `Applied the “${label.name}” label.` : `Removed the “${label.name}” label.`)
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not look up Gmail labels.')
+    } finally {
+      writingMail.current = false
+      setChangingLabel(false)
     }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const prompt = input.trim()
-    if (request.current || sendingDraft.current || !prompt) return
+    if (request.current || writingMail.current || !prompt) return
+    const question = { prompt, context }
+    setInput('')
+    setError('')
     if (sendCommand.test(prompt)) {
-      setInput('')
-      reviewDraft()
+      await sendDraft(reviewId ?? latestDraftId(turns), question)
+      return
+    }
+    const label = labelCommand(prompt, labels?.map(({ name }) => name))
+    if (label) {
+      await changeOpenEmailLabel(label, question)
       return
     }
     const controller = new AbortController()
     request.current = controller
-    const question = { prompt, context }
     const history = turns.slice(-4).map((turn) => ({
       prompt: turn.prompt,
       answer: historyAnswer(turn.reply),
     }))
-    setInput('')
-    setError('')
     setPending(question)
     try {
       const reply = await askAssistant({
@@ -173,6 +253,7 @@ export default function AssistantChat({
       }, controller.signal)
       if (!controller.signal.aborted) {
         setTurns((previous) => [...previous, { ...question, reply }])
+        if (reply.actions?.some(({ kind }) => kind === 'draft')) setReviewId(null)
       }
     } catch (reason) {
       if (!controller.signal.aborted) {
@@ -204,7 +285,7 @@ export default function AssistantChat({
           className="assistant-quiet"
           type="button"
           onClick={reset}
-          disabled={sending || (!turns.length && !pending && !input && !error)}
+          disabled={busy || (!turns.length && !pending && !input && !error)}
         >
           New chat
         </button>
@@ -238,23 +319,28 @@ export default function AssistantChat({
               <p>{turn.prompt}</p>
             </div>
             <div className="assistant-reply">
-              <p className="assistant-answer">{turn.reply.answer}</p>
+              <div className="assistant-answer">
+                {turn.receipt ? <p>{turn.reply.answer}</p> : (
+                  <Markdown skipHtml components={markdownComponents}>{turn.reply.answer}</Markdown>
+                )}
+              </div>
               {turn.reply.actions?.map((action, actionIndex) => {
                 if (action.kind === 'draft') {
                   const id = `${index}:${actionIndex}`
-                  const draft = { to: action.to ?? '', subject: action.subject, body: action.body }
+                  const draft = editedDrafts[id] ?? { to: action.to ?? '', subject: action.subject, body: action.body }
                   return (
                     <AssistantDraftCard
                       key={actionIndex}
                       draft={draft}
                       delivery={deliveries[id]}
                       reviewing={reviewId === id}
-                      sending={sending}
-                      onReview={() => reviewDraft(id)}
+                      sending={busy}
+                      onReview={() => setReviewId(id)}
                       onCancel={() => setReviewId(null)}
-                      onSend={(reviewed) => void sendDraft(id, reviewed)}
+                      onEdit={(edited) => setEditedDrafts((previous) => ({ ...previous, [id]: edited }))}
+                      onSend={() => void sendDraft(id)}
                       onUseDraft={() => {
-                        if (!sendingDraft.current && onUseDraft(draft)) {
+                        if (!writingMail.current && onUseDraft(draft)) {
                           setDelivery(id, { status: 'compose' })
                         }
                       }}
@@ -273,7 +359,7 @@ export default function AssistantChat({
                         disabled={updating}
                         onClick={() => {
                           setError('')
-                          if (isOpen) onApplyLabel(action.message_id, action.label_id, setError)
+                          if (isOpen) void onChangeLabel(action.message_id, action.label_id, true, setError)
                           else void onOpenMessage(action.message_id, setError)
                         }}
                       >
@@ -295,6 +381,7 @@ export default function AssistantChat({
             <p className="assistant-status" role="status">Working on your request…</p>
           </div>
         )}
+        {changingLabel && <p className="assistant-status" role="status">Updating Gmail labels…</p>}
         {error && <p className="error" role="alert">{error}</p>}
       </div>
 
@@ -305,7 +392,7 @@ export default function AssistantChat({
               key={label}
               className="assistant-chip"
               type="button"
-              disabled={pending !== null || sending}
+              disabled={pending !== null || busy}
               onClick={() => {
                 setInput(text)
                 promptField.current?.focus()
@@ -330,13 +417,13 @@ export default function AssistantChat({
             }}
             rows={2}
             maxLength={4000}
-            readOnly={pending !== null || sending}
+            readOnly={pending !== null || busy}
             placeholder="Ask about your mail…"
           />
           {pending ? (
             <button className="assistant-send" type="button" onClick={cancel}>Cancel</button>
           ) : (
-            <button className="assistant-send" type="submit" disabled={sending || !input.trim()}>Send</button>
+            <button className="assistant-send" type="submit" disabled={busy || !input.trim()}>Send</button>
           )}
         </div>
         <p className="assistant-privacy">Prompts and relevant email text are processed by Groq.</p>
