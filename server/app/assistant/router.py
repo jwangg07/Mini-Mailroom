@@ -5,10 +5,20 @@ from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from groq import APIError, APITimeoutError, RateLimitError
+from groq import (
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    BadRequestError,
+    RateLimitError,
+)
 from mcp import MCPError
 
-from app.assistant.agent import AssistantResponseError, run_assistant
+from app.assistant.agent import (
+    AssistantResponseError,
+    provider_error_code,
+    run_assistant,
+)
 from app.assistant.schemas import AssistantRequest, AssistantResponse
 from app.auth.models import User
 from app.auth.rate_limit import limit_requests
@@ -59,18 +69,43 @@ def create_assistant_router(
             return await run_assistant(
                 body, settings.groq_model, api_key, user, mail_service, limit_send
             )
-        except* (APITimeoutError, TimeoutError):
-            http_error = HTTPException(504, "Mail assistant timed out.")
-        except* RateLimitError:
-            http_error = HTTPException(503, "Mail assistant is busy. Try again later.")
-        except* (APIError, MCPError, AssistantResponseError) as errors:
+        except* (APIError, MCPError, TimeoutError, AssistantResponseError) as errors:
             error = errors.exceptions[0]
             while isinstance(error, BaseExceptionGroup):
                 error = error.exceptions[0]
-            logger.warning("Mail assistant run failed (%s)", type(error).__name__)
-            http_error = HTTPException(
-                502, "Mail assistant could not complete the request."
-            )
+            if isinstance(error, APIStatusError):
+                logger.warning(
+                    "Groq request failed (status=%s, code=%s)",
+                    error.status_code,
+                    provider_error_code(error) or "unknown",
+                )
+            else:
+                logger.warning("Mail assistant run failed (%s)", type(error).__name__)
+
+            if isinstance(error, RateLimitError):
+                retry_after = error.response.headers.get("Retry-After", "")
+                detail = "Groq's rate limit was reached. Try again shortly."
+                headers = None
+                if (
+                    retry_after.isascii()
+                    and retry_after.isdecimal()
+                    and len(retry_after) <= 9
+                ):
+                    seconds = int(retry_after)
+                    unit = "second" if seconds == 1 else "seconds"
+                    detail = (
+                        f"Groq's rate limit was reached. Try again in {seconds} {unit}."
+                    )
+                    headers = {"Retry-After": retry_after}
+                http_error = HTTPException(429, detail, headers=headers)
+            elif isinstance(error, (APITimeoutError, TimeoutError)):
+                http_error = HTTPException(504, "Mail assistant timed out.")
+            elif isinstance(error, BadRequestError):
+                http_error = HTTPException(502, "Groq rejected the assistant request.")
+            else:
+                http_error = HTTPException(
+                    502, "Mail assistant could not complete the request."
+                )
         # Keep the HTTP exception out of MCP task groups on early Python 3.11.
         raise http_error from None
 

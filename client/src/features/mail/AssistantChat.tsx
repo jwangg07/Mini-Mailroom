@@ -165,8 +165,8 @@ export default function AssistantChat({
     const draft = draftId && (!draftStatus || draftStatus === 'rejected') ? getDraft(draftId) : undefined
     const closedDraft = draftStatus === 'sent' || draftStatus === 'uncertain' || draftStatus === 'compose'
     const history = turns.slice(-2).map(({ prompt, reply }) => ({
-      prompt: Array.from(prompt).slice(0, 1000).join(''),
-      answer: Array.from(reply.answer).slice(0, 1400).join(''),
+      prompt: Array.from(prompt).slice(0, 500).join(''),
+      answer: Array.from(reply.answer).slice(0, 800).join(''),
     }))
     setPending(question)
     try {
@@ -190,6 +190,7 @@ export default function AssistantChat({
       }
     } catch (reason) {
       if (!controller.signal.aborted) {
+        if (reason instanceof HttpError && reason.status === 429) setInput(prompt)
         setError(reason instanceof HttpError
           ? reason.message
           : 'The connection was lost. If you requested a send, check Sent before retrying.')

@@ -120,7 +120,7 @@ def create_mailbox_server(
     labels: dict[str, str] | None = None
 
     def expose(messages: list[dict], *, full: bool) -> list[dict]:
-        allowance = min(4_000, 12_000 // max(1, len(messages))) if full else 240
+        allowance = min(2_400, 4_000 // max(1, len(messages))) if full else 180
         output = []
         for message in messages:
             visible_messages.add(message["id"])
@@ -149,9 +149,9 @@ def create_mailbox_server(
 
     @server.tool(annotations=read_only, structured_output=True)
     async def read_recent_messages(
-        limit: PageSize = 5, page_token: PageToken = ""
+        limit: PageSize = 5, page_token: PageToken = "", include_labels: bool = False
     ) -> dict[str, Any]:
-        """Read recent inbox emails with bodies. Use next_page_token for older mail."""
+        """Read recent inbox emails. Set include_labels for the label catalog. Page for older mail."""
         page = await gmail_call(
             lambda: mail_service().recent_messages(user_id, limit, page_token)
         )
@@ -159,6 +159,7 @@ def create_mailbox_server(
             "emails": expose(page["messages"], full=True),
             "next_page_token": page.get("nextPageToken"),
             "unreadable": page.get("unreadable", 0),
+            **(await list_labels() if include_labels else {}),
         }
 
     @server.tool(annotations=read_only, structured_output=True)
@@ -177,8 +178,10 @@ def create_mailbox_server(
         }
 
     @server.tool(annotations=read_only, structured_output=True)
-    async def read_messages(message_ids: MessageIds | None = None) -> dict[str, Any]:
-        """Read specific emails by ID. Omit IDs to read the open email."""
+    async def read_messages(
+        message_ids: MessageIds | None = None, include_labels: bool = False
+    ) -> dict[str, Any]:
+        """Read emails by ID or the open email. Set include_labels for the label catalog."""
         ids = message_ids or ([request.message_id] if request.message_id else [])
         if not ids:
             raise ToolError("Search for the email or provide its ID.")
@@ -198,6 +201,7 @@ def create_mailbox_server(
                 [item for item in fetched if isinstance(item, dict)], full=True
             ),
             "errors": [str(item) for item in fetched if isinstance(item, ToolError)],
+            **(await list_labels() if include_labels else {}),
         }
 
     @server.tool(annotations=read_only, structured_output=True)

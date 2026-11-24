@@ -110,9 +110,15 @@ review `actions`, confirmed `label_updates`, and the `draft_delivery` status.
 HTTP 401 indicates a missing or expired session. HTTP 503 with
 `Mail assistant is disabled.` indicates a missing key source. For
 `Mail assistant temporarily unavailable.`, check the secret ARN, the
-`GROQ_API_KEY` field, and the execution role permissions. For HTTP 502, check
-the model name, Groq project key, and outbound connectivity. Lambda logs the
-error type for failed Groq requests. HTTP 504 indicates an assistant timeout.
+`GROQ_API_KEY` field, and the execution role permissions. HTTP 429 with
+`Groq's rate limit was reached` means the Groq organization hit a quota. Check
+the organization's model limits, including tokens per minute, and use the
+`Retry-After` delay when returned. The chat keeps your prompt for retry. A
+single chat turn can make several Groq calls. [Groq rate limits](https://console.groq.com/docs/rate-limits)
+
+For HTTP 502, check the provider status and error code in the Lambda's
+CloudWatch logs. For example, `tool_use_failed` means Groq rejected a generated
+tool call. HTTP 504 indicates an assistant timeout.
 
 ## Code entry points
 

@@ -120,9 +120,10 @@ def test_assistant_summarizes_recent_mail_with_minimal_context(setup, monkeypatc
     clock = SimpleNamespace(time=lambda: int(time.time()) // 60 * 60)
     monkeypatch.setattr("app.auth.rate_limit.time", clock)
     messages = [mailbox_email(index) for index in range(5)]
-    messages[0]["body"] = (
-        "Project notes. " + "x" * 5_000 + " Deadline is Tuesday at noon."
-    )
+    for message in messages:
+        message["body"] = (
+            "Project notes. " + "x" * 5_000 + " Deadline is Tuesday at noon."
+        )
     gmail.recent_messages.return_value = {
         "messages": messages,
         "nextPageToken": "older",
@@ -185,17 +186,19 @@ def test_assistant_summarizes_recent_mail_with_minimal_context(setup, monkeypatc
     gmail.change_labels.assert_not_called()
     assert [message["content"] for message in requests[0]["messages"][1:-1]] == [
         "Earlier request 2",
-        "y" * 1_400,
+        "y" * 800,
         "Earlier request 3",
-        "y" * 1_400,
+        "y" * 800,
     ]
     read = json.loads(requests[1]["messages"][-1]["content"])
     assert len(read["emails"]) == 5
-    assert len(read["emails"][0]["body"]) <= 2_400
+    assert sum(len(email["body"]) for email in read["emails"]) <= 4_000
     assert read["emails"][0]["body"].endswith("Deadline is Tuesday at noon.")
     assert "Private HTML" not in json.dumps(requests)
     assert "Image data" not in json.dumps(requests)
     assert "Private unrelated draft." not in json.dumps(requests)
+    assert all(request["max_completion_tokens"] == 1_024 for request in requests)
+    assert all(request["reasoning_effort"] == "low" for request in requests)
 
 
 def test_assistant_applies_relevant_labels_in_the_same_turn(setup, monkeypatch):
@@ -221,8 +224,7 @@ def test_assistant_applies_relevant_labels_in_the_same_turn(setup, monkeypatch):
         monkeypatch,
         completion(
             tool_calls=[
-                tool_call("read_recent_messages", '{"limit":5}', "read"),
-                tool_call("list_labels", "{}", "labels"),
+                tool_call("read_recent_messages", '{"limit":5,"include_labels":true}'),
             ],
             finish_reason="tool_calls",
         ),
@@ -261,6 +263,9 @@ def test_assistant_applies_relevant_labels_in_the_same_turn(setup, monkeypatch):
     }
     assert requests[2]["messages"][1:] == [{"role": "user", "content": raw_prompt}]
     assert requests[2]["response_format"] == {"type": "json_object"}
+    assert requests[2]["max_completion_tokens"] == 256
+    mailbox = json.loads(requests[1]["messages"][-1]["content"])
+    assert mailbox["labels"] == {"Label_1": "Work", "Label_2": "Travel"}
     outcomes = json.loads(requests[3]["messages"][-1]["content"])["updates"]
     assert outcomes[1] == {"id": "m1", "error": "Gmail rate limit reached."}
 
@@ -303,8 +308,9 @@ def test_label_tool_checks_mailbox_scope_before_applying_any_change(
     assert "Use the requested number" in requests[-1]["messages"][-1]["content"]
 
 
+@pytest.mark.parametrize("status", [429, 500])
 def test_draft_and_send_runs_without_a_follow_up_and_records_delivery(
-    setup, monkeypatch
+    setup, monkeypatch, status
 ):
     store, gmail = setup
     gmail.send.return_value = {"id": "sent1"}
@@ -321,7 +327,7 @@ def test_draft_and_send_runs_without_a_follow_up_and_records_delivery(
             tool_calls=[tool_call("send_email", outgoing, "repeated")],
             finish_reason="tool_calls",
         ),
-        httpx.Response(500, json={"error": "Model unavailable after sending"}),
+        httpx.Response(status, json={"error": "Model unavailable after sending"}),
     )
     with signed_in_client(store, groq_api_key=SecretStr("fake-groq-key")) as client:
         response = ask(client, prompt)
@@ -517,3 +523,74 @@ def test_disabled_and_provider_failure_responses(setup, monkeypatch):
     assert response.json() == {
         "detail": "Mail assistant could not complete the request."
     }
+
+
+@pytest.mark.parametrize("during_authorization", [False, True])
+def test_groq_rate_limit_stops_the_turn_and_preserves_retry_after(
+    setup, monkeypatch, during_authorization
+):
+    store, gmail = setup
+    responses = []
+    if during_authorization:
+        responses.append(
+            completion(
+                tool_calls=[tool_call("send_current_draft", "{}")],
+                finish_reason="tool_calls",
+            )
+        )
+    responses.append(
+        httpx.Response(
+            429,
+            headers={"Retry-After": "18"},
+            json={"error": {"code": "rate_limit_exceeded", "message": "Private text"}},
+        )
+    )
+    requests = mock_groq(monkeypatch, *responses)
+    with signed_in_client(store, groq_api_key=SecretStr("fake-groq-key")) as client:
+        response = ask(
+            client,
+            "Send the draft.",
+            draft={"to": "lee@example.com", "subject": "Hello", "body": "Hello Lee"},
+        )
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "18"
+    assert response.json() == {
+        "detail": "Groq's rate limit was reached. Try again in 18 seconds."
+    }
+    assert len(requests) == len(responses)
+    gmail.send.assert_not_called()
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_invalid_generated_tool_call_is_retried_once(
+    setup, monkeypatch, caplog, recover
+):
+    store, gmail = setup
+    rejected = httpx.Response(
+        400,
+        json={
+            "error": {
+                "code": "tool_use_failed",
+                "message": "Failed to call a tool.",
+                "failed_generation": "private generated text",
+            }
+        },
+    )
+    requests = mock_groq(
+        monkeypatch, rejected, completion("How can I help?") if recover else rejected
+    )
+    with signed_in_client(store, groq_api_key=SecretStr("fake-groq-key")) as client:
+        response = post(client)
+    assert len(requests) == 2
+    assert "Use valid JSON tool arguments." in requests[1]["messages"][0]["content"]
+    assert "private generated text" not in caplog.text + response.text + json.dumps(
+        requests
+    )
+    if recover:
+        assert response.json() == {"answer": "How can I help?"}
+    else:
+        assert response.status_code == 502
+        assert response.json() == {"detail": "Groq rejected the assistant request."}
+        assert "status=400, code=tool_use_failed" in caplog.text
+    gmail.send.assert_not_called()
+    gmail.change_labels.assert_not_called()
