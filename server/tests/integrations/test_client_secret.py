@@ -20,9 +20,7 @@ def sdk(monkeypatch):
     session = Mock()
     session.client.return_value = client
     factory = Mock(return_value=session)
-    monkeypatch.setattr(
-        "integrations.google.client_secret.boto3.session.Session", factory
-    )
+    monkeypatch.setattr("integrations.aws_secret.boto3.session.Session", factory)
     return factory, client
 
 
@@ -46,9 +44,7 @@ def test_concurrent_reads_share_one_cached_lookup(sdk):
 def test_expired_cache_refreshes_and_never_serves_stale_on_failure(sdk, monkeypatch):
     _, client = sdk
     now = [1.0]
-    monkeypatch.setattr(
-        "integrations.google.client_secret.time.monotonic", lambda: now[0]
-    )
+    monkeypatch.setattr("integrations.aws_secret.time.monotonic", lambda: now[0])
     secret = GoogleClientSecret(ARN, cache_seconds=300)
     assert secret.get() == "test-secret"
     now[0] = 302.0

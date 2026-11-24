@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.assistant.router import create_assistant_router
 from app.auth.google_oauth import GoogleOAuth
 from app.auth.router import create_auth_router
 from app.auth.store import AuthStore, AuthStoreError, DynamoDBAuthStore, MemoryAuthStore
@@ -15,6 +16,7 @@ from app.mail.credentials import GmailCredentials
 from app.mail.gmail_client import GmailClient
 from app.mail.router import create_mail_router
 from app.mail.service import GmailService
+from integrations.aws_secret import JsonSecret
 from integrations.google.client_secret import GoogleClientSecret
 from integrations.google.credential_vault import CredentialVault
 
@@ -112,6 +114,16 @@ def create_app(
     def mail_service() -> GmailService:
         return GmailService(GmailClient(mail_credentials()))
 
+    get_groq_key = None
+    if settings.groq_api_key_secret_arn:
+        get_groq_key = JsonSecret(
+            settings.groq_api_key_secret_arn,
+            "GROQ_API_KEY",
+            error_message="Groq credentials unavailable",
+        ).get
+    elif not production and settings.groq_api_key.get_secret_value().strip():
+        get_groq_key = settings.groq_api_key.get_secret_value
+
     configure_http(app, production=production)
 
     @app.get("/health")
@@ -124,6 +136,9 @@ def create_app(
         )
     )
     app.include_router(create_mail_router(settings, store, mail_service))
+    app.include_router(
+        create_assistant_router(settings, store, mail_service, get_groq_key)
+    )
 
     # Register last so API routes take priority over the frontend at "/".
     # An unbuilt frontend should not prevent running the backend in dev mode.

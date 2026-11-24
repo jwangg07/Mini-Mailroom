@@ -26,3 +26,7 @@ class Settings(BaseSettings):
     login_requests_per_minute: int = Field(default=10, ge=1, le=100)
     mail_requests_per_minute: int = Field(default=30, ge=1, le=300)
     send_requests_per_minute: int = Field(default=5, ge=1, le=30)
+    groq_api_key: SecretStr = SecretStr("")
+    groq_api_key_secret_arn: str = ""
+    groq_model: str = "openai/gpt-oss-20b"
+    assistant_requests_per_minute: int = Field(default=5, ge=1, le=30)

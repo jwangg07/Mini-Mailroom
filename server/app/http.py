@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.auth.store import AuthStoreError
-from integrations.google.client_secret import SecretUnavailableError
+from integrations.aws_secret import SecretUnavailableError
 
 logger = logging.getLogger(__name__)
 

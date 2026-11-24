@@ -19,13 +19,13 @@ class GmailService:
     def __init__(self, client: GmailClient):
         self.client = client
 
-    def inbox(self, user_id: str, page_token: str = "") -> dict:
+    def inbox(self, user_id: str, page_token: str = "", *, limit: int = 20) -> dict:
         request = self.client.for_requests(user_id, "GET").request
         page = request(
             "/messages",
             params={
                 "labelIds": "INBOX",
-                "maxResults": 20,
+                "maxResults": limit,
                 "pageToken": page_token,
             },
         )
@@ -41,7 +41,7 @@ class GmailService:
             return mail_summary(message)
 
         with ThreadPoolExecutor(max_workers=5) as pool:
-            messages = list(pool.map(summary, page.get("messages", [])[:20]))
+            messages = list(pool.map(summary, page.get("messages", [])[:limit]))
         return {"messages": messages, "nextPageToken": page.get("nextPageToken")}
 
     def message(self, user_id: str, message_id: str) -> dict:
