@@ -257,7 +257,7 @@
 
 .compose {
   position: fixed;
-  z-index: 3;
+  z-index: 4;
   right: 24px;
   bottom: 0;
   width: min(480px, calc(100vw - 32px));

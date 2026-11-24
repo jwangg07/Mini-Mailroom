@@ -1,18 +1,23 @@
-# Mail assistant skeleton
+# Mail assistant
 
-`POST /api/mail/assistant` takes a prompt and returns `{"answer": "..."}`. It
-uses the current Mini-Mailroom session. The assistant can summarize available
-mail, suggest labels, and return reply drafts for review. Each request is a
-single turn. Drafts and label suggestions are plain text in the API response.
+Open **Assistant** from the mailbox navigation. Ask a free-form question or
+start with a suggested prompt. When an email is open, **Use open email** lets
+the assistant read that specific message. Clear the checkbox to ask about the
+mailbox. The chat stays in the current page and sends the four most recent
+exchanges with each follow-up.
+
+Choose **Open in compose** to edit a generated draft. Send it from the compose
+form when it is ready. For an existing Gmail label suggested for an open
+message, choose **Apply label** to apply it.
 
 The FastAPI route checks the session and request origin and uses the shared
 DynamoDB rate limiter in production. The Groq agent discovers tools through an
 in-process MCP client and server. The MCP tools use the signed-in user's
-existing Gmail connection to list up to eight recent inbox messages, read the
-available plain text of a message, and list up to 40 user-created labels.
+existing Gmail connection to list up to eight recent inbox messages or search
+matches, read available plain text, and list up to 40 user-created labels.
 The turn has a 25-second model and tool deadline and allows up to four tool calls.
 
-Enabling the assistant allows Groq to receive prompts and the mailbox data
+Enabling the assistant allows Groq to receive prompts, recent chat exchanges, and mailbox data
 retrieved during a run, such as sender, subject, snippet, label names, and up to
 6,000 characters of plain text per message. Gmail credentials, HTML, inline
 images, and attachments stay outside the model request. Use a test mailbox for
@@ -81,9 +86,15 @@ after the cache expires reads the current secret value.
 
 ## Verify the deployment
 
-Open the app at its Function URL, sign in to the test mailbox, and run this in
-the browser developer console. The current session cookie goes with the same-origin
-request. Run the same check on `http://localhost:5173` for local development.
+Open the app at its Function URL and sign in to the test mailbox. Open a test
+email and click **Assistant**. Try **Summarize** and send the prompt. Check that
+the response describes that email. Then try **Draft reply** and check that
+**Open in compose** fills the editable compose form. Try **Suggest labels**
+with an existing Gmail label and apply the suggestion to the test email.
+
+To check the API directly, run this in the developer console on the signed-in
+app page. The current session cookie goes with the same-origin request. The
+same check works on `http://localhost:5173` for local development.
 
 ```js
 const response = await fetch("/api/mail/assistant", {
@@ -98,6 +109,9 @@ console.log(response.status, await response.json());
 ```
 
 Expect HTTP 200 and an `answer` with the available mail summarized.
+The request can also include a `message_id` and up to four `history` entries
+with `prompt` and `answer` fields. A response can include an `actions` array
+with draft and label suggestions for review in the UI.
 HTTP 401 indicates a missing or expired session. HTTP 503 with
 `Mail assistant is disabled.` indicates a missing key source. For
 `Mail assistant temporarily unavailable.`, check the secret ARN, the
@@ -109,6 +123,7 @@ error type for failed Groq requests. HTTP 504 indicates an assistant timeout.
 
 | File | Responsibility |
 | --- | --- |
+| `client/src/features/mail/AssistantChat.tsx` | Chat, open-email context, and review controls |
 | `server/app/assistant/router.py` | Request validation, auth, quota, and HTTP response |
 | `server/app/assistant/agent.py` | System instructions, Groq requests, and MCP tool-call loop |
 | `server/app/assistant/mail_tools.py` | MCP tool definitions and mailbox data passed to the model |

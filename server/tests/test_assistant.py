@@ -3,7 +3,7 @@
 import json
 import time
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import httpx
 import pytest
@@ -119,10 +119,15 @@ def test_assistant_uses_signed_in_mailbox_and_minimizes_model_input(setup, monke
         "inlineImages": {"cid": {"data": "attachment-data"}},
     }
     gmail.labels.return_value = [{"id": "Label_1", "name": "Work"}]
+    gmail.search.return_value = gmail.inbox.return_value
     requests = mock_groq(
         monkeypatch,
         completion(
             tool_calls=[tool_call("list_recent_messages", "{}", "list")],
+            finish_reason="tool_calls",
+        ),
+        completion(
+            tool_calls=[tool_call("search_mail", '{"query":"is:unread"}', "search")],
             finish_reason="tool_calls",
         ),
         completion(
@@ -172,24 +177,100 @@ def test_assistant_uses_signed_in_mailbox_and_minimizes_model_input(setup, monke
 
     secret.get_secret_value.assert_called_once_with(SecretId="secret")
     gmail.inbox.assert_called_once_with("alice", limit=8)
+    gmail.search.assert_called_once_with("alice", "is:unread", limit=8)
     gmail.message.assert_called_once_with("alice", "abc123")
     gmail.labels.assert_called_once_with("alice")
     assert {tool["function"]["name"] for tool in requests[0]["tools"]} == {
         "list_recent_messages",
         "read_message",
         "list_labels",
+        "search_mail",
+        "prepare_draft",
     }
     inbox = json.loads(requests[1]["messages"][-1]["content"])
     assert inbox["messages"][0]["id"] == "abc123"
     assert inbox["older_messages_available"] is True
     assert "private-page-token" not in json.dumps(inbox)
-    result = requests[2]["messages"][-1]
+    search = json.loads(requests[2]["messages"][-1]["content"])
+    assert search["messages"][0]["id"] == "abc123"
+    assert search["more_results_available"] is True
+    result = requests[3]["messages"][-1]
     assert result["tool_call_id"] == "call-1"
     data = json.loads(result["content"])
     assert data["body_truncated"] is True
     assert len(data["body"]) == 6_000
     assert "html" not in data and "inlineImages" not in data
-    assert json.loads(requests[3]["messages"][-1]["content"])["labels"] == ["Work"]
+    assert json.loads(requests[4]["messages"][-1]["content"])["labels"] == ["Work"]
+    assert requests[4]["tool_choice"] == "none"
+
+
+def test_chat_uses_open_email_history_and_returns_review_actions(setup, monkeypatch):
+    store, gmail = setup
+    gmail.message.return_value = {
+        "id": "abc123",
+        "from": "Lee <lee@example.com>",
+        "subject": "Review",
+        "body": "Can you review this today?",
+    }
+    gmail.labels.return_value = [{"id": "Label_1", "name": "Work"}]
+    requests = mock_groq(
+        monkeypatch,
+        completion(
+            tool_calls=[tool_call("read_open_message", "{}", "read")],
+            finish_reason="tool_calls",
+        ),
+        completion(
+            tool_calls=[tool_call("list_labels", "{}", "list")],
+            finish_reason="tool_calls",
+        ),
+        completion(
+            tool_calls=[
+                tool_call(
+                    "prepare_draft",
+                    '{"to":"lee@example.com","subject":"Re: Review","body":"I can review it today."}',
+                    "draft",
+                ),
+                tool_call("suggest_label", '{"label_name":"Work"}', "label"),
+            ],
+            finish_reason="tool_calls",
+        ),
+        completion("Your reply and label suggestion are ready."),
+    )
+    settings = Settings(_env_file=None, groq_api_key=SecretStr("fake-groq-key"))
+    with TestClient(create_app(settings, store=store)) as client:
+        client.cookies.set(SESSION_COOKIE, "session")
+        response = client.post(
+            PATH,
+            headers=HEADERS,
+            json={
+                "prompt": "Draft that reply and suggest a label.",
+                "message_id": "abc123",
+                "history": [{"prompt": "Can I reply today?", "answer": "Yes."}],
+            },
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "answer": "Your reply and label suggestion are ready.",
+        "actions": [
+            {
+                "kind": "draft",
+                "to": "lee@example.com",
+                "subject": "Re: Review",
+                "body": "I can review it today.",
+            },
+            {
+                "kind": "label",
+                "message_id": "abc123",
+                "label_id": "Label_1",
+                "label_name": "Work",
+            },
+        ],
+    }
+    assert gmail.mock_calls == [call.message("alice", "abc123"), call.labels("alice")]
+    assert requests[0]["messages"][1:3] == [
+        {"role": "user", "content": "Can I reply today?"},
+        {"role": "assistant", "content": "Yes."},
+    ]
 
 
 def test_invalid_mcp_arguments_and_write_tools_cannot_touch_mail(setup, monkeypatch):

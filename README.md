@@ -9,9 +9,9 @@ See the [security guide](docs/SECURITY_CHANGES.md) for the changes and rollout s
 See the [architecture guide](docs/ARCHITECTURE.md) to follow sign-in, inbox
 loading, and sending from the screen through the backend.
 
-The Groq mail assistant is available through an authenticated API. See the
-[assistant guide](docs/MAIL_ASSISTANT.md) for local setup, AWS changes, and a
-signed-in smoke test.
+Open **Assistant** in your mailbox to ask about email, search Gmail, draft a
+reply, or get label suggestions. See the [assistant guide](docs/MAIL_ASSISTANT.md)
+for local setup, AWS configuration, and a signed-in smoke test.
 
 ## Run locally
 

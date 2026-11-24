@@ -20,15 +20,16 @@ class GmailService:
         self.client = client
 
     def inbox(self, user_id: str, page_token: str = "", *, limit: int = 20) -> dict:
-        request = self.client.for_requests(user_id, "GET").request
-        page = request(
-            "/messages",
-            params={
-                "labelIds": "INBOX",
-                "maxResults": limit,
-                "pageToken": page_token,
-            },
+        return self._message_page(
+            user_id, {"labelIds": "INBOX", "pageToken": page_token}, limit
         )
+
+    def search(self, user_id: str, query: str, *, limit: int) -> dict:
+        return self._message_page(user_id, {"q": query}, limit)
+
+    def _message_page(self, user_id: str, filters: dict, limit: int) -> dict:
+        request = self.client.for_requests(user_id, "GET").request
+        page = request("/messages", params={**filters, "maxResults": limit})
 
         def summary(item):
             message = request(

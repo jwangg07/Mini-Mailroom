@@ -7,10 +7,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from groq import APIError, APITimeoutError, RateLimitError
 from mcp import MCPError
-from pydantic import BaseModel, StringConstraints
 
 from app.assistant.agent import AssistantResponseError, run_assistant
 from app.assistant.mail_tools import create_mailbox_server
+from app.assistant.schemas import AssistantRequest, AssistantResponse
 from app.auth.rate_limit import limit_requests
 from app.auth.security import require_origin, require_user
 from app.auth.store import AuthStore
@@ -19,16 +19,6 @@ from app.mail.service import GmailService
 from integrations.aws_secret import SecretUnavailableError
 
 logger = logging.getLogger(__name__)
-
-
-class AssistantRequest(BaseModel):
-    prompt: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)
-    ]
-
-
-class AssistantResponse(BaseModel):
-    answer: str
 
 
 def create_assistant_router(
@@ -55,20 +45,19 @@ def create_assistant_router(
                 503, "Mail assistant temporarily unavailable."
             ) from None
 
-    @router.post("/api/mail/assistant")
+    @router.post("/api/mail/assistant", response_model_exclude_none=True)
     async def assist(
         body: AssistantRequest,
         credentials: Annotated[tuple[str, str], Depends(authorize)],
     ) -> AssistantResponse:
         user_id, api_key = credentials
         try:
-            answer = await run_assistant(
-                body.prompt,
+            return await run_assistant(
+                body,
                 settings.groq_model,
                 api_key,
-                create_mailbox_server(mail_service, user_id),
+                create_mailbox_server(mail_service, user_id, body.message_id),
             )
-            return AssistantResponse(answer=answer)
         except* (APITimeoutError, TimeoutError):
             http_error = HTTPException(504, "Mail assistant timed out.")
         except* RateLimitError:

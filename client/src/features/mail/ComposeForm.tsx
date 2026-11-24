@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import { useEffect, useImperativeHandle, useRef, useState } from 'react'
+import type { FormEvent, Ref } from 'react'
 import { sendMail } from './api'
 import type { MailDraft } from './types'
 
-export default function ComposeForm({ open, onClose }: { open: boolean; onClose: () => void }) {
+export type ComposeFormHandle = { loadDraft: (draft: MailDraft) => boolean }
+
+export default function ComposeForm({ open, onClose, ref }: {
+  open: boolean
+  onClose: () => void
+  ref?: Ref<ComposeFormHandle>
+}) {
   const [draft, setDraft] = useState<MailDraft>({
     to: '',
     subject: '',
@@ -18,6 +24,20 @@ export default function ComposeForm({ open, onClose }: { open: boolean; onClose:
   useEffect(() => {
     if (open) recipient.current?.focus()
   }, [open])
+  useImperativeHandle(ref, () => ({
+    loadDraft(nextDraft) {
+      if (sendingRequest.current) return false
+      const hasDraft = draft.to || draft.subject || draft.body
+      if (hasDraft && !window.confirm('Replace the email currently in your compose form?')) {
+        return false
+      }
+      setDraft(nextDraft)
+      setError('')
+      setNotice('')
+      if (open) recipient.current?.focus()
+      return true
+    },
+  }), [draft, open])
 
   async function sendDraft(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

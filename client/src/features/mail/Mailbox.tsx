@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { changeLabel, getLabels, getMessage, trashMessage } from './api'
+import AssistantChat from './AssistantChat'
 import ComposeForm from './ComposeForm'
+import type { ComposeFormHandle } from './ComposeForm'
 import Inbox from './Inbox'
 import MessageDetail from './MessageDetail'
 import type { MailLabel, MailMessage } from './types'
@@ -14,12 +16,15 @@ export default function Mailbox() {
   const [labelsError, setLabelsError] = useState('')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [composing, setComposing] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
   const [updating, setUpdating] = useState(false)
   const [error, setError] = useState('')
   const activeMessage = useRef<AbortController | null>(null)
   const updatePending = useRef(false)
   const inboxButton = useRef<HTMLButtonElement>(null)
   const composeButton = useRef<HTMLButtonElement>(null)
+  const composeForm = useRef<ComposeFormHandle>(null)
+  const assistantButton = useRef<HTMLButtonElement>(null)
   const readingPane = useRef<HTMLElement>(null)
 
   useEffect(() => () => activeMessage.current?.abort(), [])
@@ -51,7 +56,7 @@ export default function Mailbox() {
     return () => controller.abort()
   }, [needsLabels])
 
-  async function openMessage(id: string) {
+  async function openMessage(id: string, reportError: (message: string) => void = setError) {
     if (updatePending.current) return
     activeMessage.current?.abort()
     const controller = new AbortController()
@@ -64,7 +69,7 @@ export default function Mailbox() {
       if (!controller.signal.aborted) setSelected(message)
     } catch (reason) {
       if (!controller.signal.aborted)
-        setError(
+        reportError(
           reason instanceof Error ? reason.message : 'Could not open message.',
         )
     } finally {
@@ -80,7 +85,10 @@ export default function Mailbox() {
     requestAnimationFrame(() => inboxButton.current?.focus())
   }
 
-  async function updateMessage(action: 'trash' | { id: string; applied: boolean }) {
+  async function updateMessage(
+    action: 'trash' | { id: string; applied: boolean },
+    reportError: (message: string) => void = setError,
+  ) {
     if (!selected || updatePending.current) return
     updatePending.current = true
     setUpdating(true)
@@ -99,7 +107,7 @@ export default function Mailbox() {
         setSelected({ ...selected, labelIds })
       }
     } catch (reason) {
-      setError(
+      reportError(
         reason instanceof Error ? reason.message : 'Could not update message.',
       )
     } finally {
@@ -109,7 +117,10 @@ export default function Mailbox() {
   }
 
   return (
-    <section className={selected || openingId ? 'mailbox is-reading' : 'mailbox'} aria-label="Your mail">
+    <section
+      className={`mailbox${selected || openingId ? ' is-reading' : ''}${assistantOpen ? ' has-assistant' : ''}`}
+      aria-label="Your mail"
+    >
       <nav className="mailbox-nav" aria-label="Mailbox">
         <button
           className="compose-button"
@@ -127,6 +138,16 @@ export default function Mailbox() {
           onClick={closeMessage}
         >
           Inbox
+        </button>
+        <button
+          className="assistant-toggle"
+          ref={assistantButton}
+          type="button"
+          aria-expanded={assistantOpen}
+          aria-controls="mail-assistant"
+          onClick={() => setAssistantOpen((open) => !open)}
+        >
+          <span aria-hidden="true">✦</span> Assistant
         </button>
         <a href="/auth/google/login?reconnect=true">Reconnect Gmail</a>
       </nav>
@@ -156,7 +177,28 @@ export default function Mailbox() {
           <p className="reading-status">Select an email to read it.</p>
         )}
       </section>
-      <ComposeForm open={composing} onClose={() => {
+      <AssistantChat
+        open={assistantOpen}
+        selected={selected}
+        updating={updating}
+        onClose={() => {
+          setAssistantOpen(false)
+          assistantButton.current?.focus()
+        }}
+        onUseDraft={(draft) => {
+          if (composeForm.current?.loadDraft(draft)) {
+            setAssistantOpen(false)
+            setComposing(true)
+          }
+        }}
+        onApplyLabel={(messageId, labelId, reportError) => {
+          if (selected?.id === messageId) {
+            void updateMessage({ id: labelId, applied: true }, reportError)
+          }
+        }}
+        onOpenMessage={openMessage}
+      />
+      <ComposeForm ref={composeForm} open={composing} onClose={() => {
         setComposing(false)
         composeButton.current?.focus()
       }} />

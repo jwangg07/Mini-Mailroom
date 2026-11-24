@@ -38,3 +38,17 @@ export type MailDraft = {
   subject: string
   body: string
 }
+
+export type AssistantExchange = {
+  prompt: string
+  answer: string
+}
+
+export type AssistantAction =
+  | { kind: 'draft'; to?: string; subject: string; body: string }
+  | { kind: 'label'; message_id: string; label_id: string; label_name: string }
+
+export type AssistantReply = {
+  answer: string
+  actions?: AssistantAction[]
+}

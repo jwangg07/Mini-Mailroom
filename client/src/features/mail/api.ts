@@ -1,5 +1,12 @@
 import { requestJson } from '../../lib/http'
-import type { InboxPage, MailDraft, MailLabel, MailMessage } from './types'
+import type {
+  AssistantExchange,
+  AssistantReply,
+  InboxPage,
+  MailDraft,
+  MailLabel,
+  MailMessage,
+} from './types'
 
 const mailRequestFailed = 'Mail request failed. Please try again.'
 
@@ -68,4 +75,11 @@ export async function trashMessage(id: string): Promise<void> {
 export async function sendMail(draft: MailDraft): Promise<void> {
   // Never retry a send automatically: a lost response can still mean delivery.
   await postMail('/api/mail/send', draft)
+}
+
+export function askAssistant(
+  request: { prompt: string; history: AssistantExchange[]; message_id?: string },
+  signal: AbortSignal,
+): Promise<AssistantReply> {
+  return postMail('/api/mail/assistant', request, signal)
 }
