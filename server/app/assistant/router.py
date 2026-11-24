@@ -9,8 +9,8 @@ from groq import APIError, APITimeoutError, RateLimitError
 from mcp import MCPError
 
 from app.assistant.agent import AssistantResponseError, run_assistant
-from app.assistant.mail_tools import create_mailbox_server
 from app.assistant.schemas import AssistantRequest, AssistantResponse
+from app.auth.models import User
 from app.auth.rate_limit import limit_requests
 from app.auth.security import require_origin, require_user
 from app.auth.store import AuthStore
@@ -29,7 +29,7 @@ def create_assistant_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    def authorize(request: Request) -> tuple[str, str]:
+    def authorize(request: Request) -> tuple[User, str]:
         require_origin(request, settings)
         user = require_user(request, store, settings)
         if get_api_key is None:
@@ -38,7 +38,7 @@ def create_assistant_router(
             store, "assistant", user["id"], settings.assistant_requests_per_minute
         )
         try:
-            return user["id"], get_api_key().strip()
+            return user, get_api_key().strip()
         except SecretUnavailableError:
             logger.warning("Groq credential lookup unavailable")
             raise HTTPException(
@@ -48,15 +48,16 @@ def create_assistant_router(
     @router.post("/api/mail/assistant", response_model_exclude_none=True)
     async def assist(
         body: AssistantRequest,
-        credentials: Annotated[tuple[str, str], Depends(authorize)],
+        credentials: Annotated[tuple[User, str], Depends(authorize)],
     ) -> AssistantResponse:
-        user_id, api_key = credentials
+        user, api_key = credentials
+
+        def limit_send():
+            limit_requests(store, "send", user["id"], settings.send_requests_per_minute)
+
         try:
             return await run_assistant(
-                body,
-                settings.groq_model,
-                api_key,
-                create_mailbox_server(mail_service, user_id, body.message_id),
+                body, settings.groq_model, api_key, user, mail_service, limit_send
             )
         except* (APITimeoutError, TimeoutError):
             http_error = HTTPException(504, "Mail assistant timed out.")

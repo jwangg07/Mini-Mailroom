@@ -111,6 +111,7 @@ def mail_message(data: dict) -> dict:
         "id": data["id"],
         "from": headers.get("from", ""),
         "subject": headers.get("subject", "(No subject)"),
+        "date": headers.get("date", ""),
         "body": bodies.get("text/plain", fallback),
         "html": bodies.get("text/html"),
         "inlineImages": images if bodies.get("text/html") else {},

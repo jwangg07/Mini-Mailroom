@@ -1,41 +1,30 @@
 # Mail assistant
 
-Open **Assistant** from the mailbox navigation. Ask a free-form question or
-start with a suggested prompt. When an email is open, **Use open email** lets
-the assistant read that specific message. Clear the checkbox to ask about the
-mailbox. The chat stays in the current page and sends the four most recent
-exchanges with each follow-up.
+Open **Assistant** from the mailbox navigation and describe the task in your
+own words. Try one of these prompts.
 
-Type **send** or **send it** to send the draft you are reviewing, or the latest
-draft in the chat. Choose **Review and send** to edit the recipient, subject,
-and message body in chat. Click **Send email** or type **send** to deliver your
-edited version.
+- Summarize my last five inbox emails and highlight deadlines and notices.
+- Read my newest eight emails and apply any relevant Gmail labels.
+- Write a quick thank-you to Lee at lee@example.com and send it.
 
-With **Use open email** selected, type **apply label Work** or **remove label
-Work**, using the name of an existing Gmail label. You can also choose
-**Apply label** on a suggestion. Confirmed sends and label changes are
-reported in chat. Assistant replies render Markdown.
+The assistant completes the steps in one turn. Asking for a draft or label
+suggestions opens review controls. **Review and send** lets you edit a draft.
+You can also ask the assistant to send the draft as written. **Use open email**
+includes the selected message when you ask about it.
 
-The FastAPI route checks the session and request origin and uses the shared
-DynamoDB rate limiter in production. The Groq agent discovers tools through an
-in-process MCP client and server. The MCP tools use the signed-in user's
-existing Gmail connection to list up to eight recent inbox messages or search
-matches, read available plain text, and list up to 40 user-created labels.
-The turn has a 25-second model and tool deadline and allows up to four tool calls.
-
-Enabling the assistant allows Groq to receive prompts, recent chat exchanges, and mailbox data
-retrieved during a run, such as sender, subject, snippet, label names, and up to
-6,000 characters of plain text per message. Gmail credentials, HTML, inline
-images, and attachments stay outside the model request. Use a test mailbox for
-the first smoke test and review your Groq project's data settings before
-enabling the assistant for real mail.
+The agent gets two short chat exchanges and loads mail, labels, or the current
+draft as needed. Inbox reads page through messages in batches and shorten long
+bodies. Groq receives the plain-text excerpts and metadata the tools return.
+Before a Gmail write, a separate check uses only the latest user prompt to
+verify that it requests the action. The Gmail connection belongs to the current
+Mini-Mailroom session. Confirmed updates are returned to the chat.
 
 ## Run locally
 
 Set `GROQ_API_KEY` in the private `server/.env` file, then use the normal
 Mini-Mailroom development setup and Gmail sign-in. `GROQ_MODEL` defaults to
 `openai/gpt-oss-20b`. If you override it, choose a Groq model that supports
-local tool calling. [Groq local tool calling](https://console.groq.com/docs/tool-use/local-tool-calling)
+local tool calling and JSON mode. [Groq local tool calling](https://console.groq.com/docs/tool-use/local-tool-calling)
 
 ## Enable it in AWS
 
@@ -74,7 +63,7 @@ the assistant enabled.
    `5` per signed-in user). The key itself belongs in Secrets Manager.
 4. In **Lambda → Configuration → General configuration**, set the timeout to
    **60 seconds** for the initial test. This leaves time for session and secret
-   lookups as well as the 25-second agent deadline. The function needs outbound
+   lookups as well as the agent's request deadline. The function needs outbound
    HTTPS to `api.groq.com`. The existing Lambda deployment outside a VPC has
    internet access. If your function is VPC-attached, provide internet egress
    through a NAT or equivalent route.
@@ -92,12 +81,11 @@ after the cache expires reads the current secret value.
 
 ## Verify the deployment
 
-Open the app at its Function URL and sign in to the test mailbox. Open a test
-email and click **Assistant**. Try **Summarize** and send the prompt. Check that
-the response describes that email. Draft a test email addressed to an account
-you control, edit the message in **Review and send**, then type **send it**.
-Verify the delivery in Gmail. With the test email open, try **apply label Work**
-and **remove label Work** using an existing label.
+Open the app at its Function URL and sign in to a test mailbox. Ask the
+assistant to summarize the deadlines in your latest five emails and then try a
+separate request to read and label the same batch. Check the labels in Gmail.
+Ask it to write and send a short test email to an address you control, then
+verify the result in Sent.
 
 To check the API directly, run this in the developer console on the signed-in
 app page. The current session cookie goes with the same-origin request. The
@@ -116,9 +104,9 @@ console.log(response.status, await response.json());
 ```
 
 Expect HTTP 200 and an `answer` with the available mail summarized.
-The request can also include a `message_id` and up to four `history` entries
-with `prompt` and `answer` fields. A response can include an `actions` array
-with draft and label suggestions for review in the UI.
+The request can include an open `message_id`, a current `draft`, and recent
+`history` entries with `prompt` and `answer` fields. The response can include
+review `actions`, confirmed `label_updates`, and the `draft_delivery` status.
 HTTP 401 indicates a missing or expired session. HTTP 503 with
 `Mail assistant is disabled.` indicates a missing key source. For
 `Mail assistant temporarily unavailable.`, check the secret ARN, the

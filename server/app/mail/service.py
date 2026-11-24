@@ -24,26 +24,47 @@ class GmailService:
             user_id, {"labelIds": "INBOX", "pageToken": page_token}, limit
         )
 
-    def search(self, user_id: str, query: str, *, limit: int) -> dict:
-        return self._message_page(user_id, {"q": query}, limit)
+    def recent_messages(self, user_id: str, limit: int, page_token: str = "") -> dict:
+        return self._message_page(
+            user_id, {"labelIds": "INBOX", "pageToken": page_token}, limit, full=True
+        )
 
-    def _message_page(self, user_id: str, filters: dict, limit: int) -> dict:
+    def search(
+        self, user_id: str, query: str, *, limit: int, page_token: str = ""
+    ) -> dict:
+        return self._message_page(user_id, {"q": query, "pageToken": page_token}, limit)
+
+    def _message_page(
+        self, user_id: str, filters: dict, limit: int, *, full: bool = False
+    ) -> dict:
         request = self.client.for_requests(user_id, "GET").request
         page = request("/messages", params={**filters, "maxResults": limit})
+        params = (
+            {"format": "full"}
+            if full
+            else {"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]}
+        )
+        format_message = mail_message if full else mail_summary
 
-        def summary(item):
-            message = request(
-                "/messages/" + quote(item["id"], safe=""),
-                params={
-                    "format": "metadata",
-                    "metadataHeaders": ["From", "Subject", "Date"],
-                },
-            )
-            return mail_summary(message)
+        def load(item):
+            try:
+                return format_message(
+                    request("/messages/" + quote(item["id"], safe=""), params=params)
+                )
+            except HTTPException:
+                if full:
+                    return None
+                raise
 
         with ThreadPoolExecutor(max_workers=5) as pool:
-            messages = list(pool.map(summary, page.get("messages", [])[:limit]))
-        return {"messages": messages, "nextPageToken": page.get("nextPageToken")}
+            messages = list(pool.map(load, page.get("messages", [])[:limit]))
+        result = {"messages": messages, "nextPageToken": page.get("nextPageToken")}
+        if full:
+            result["unreadable"] = messages.count(None)
+            result["messages"] = [
+                message for message in messages if message is not None
+            ]
+        return result
 
     def message(self, user_id: str, message_id: str) -> dict:
         data = self.client.request(
@@ -97,12 +118,25 @@ class GmailService:
         self, user_id: str, message_id: str, label_id: str, applied: bool
     ) -> dict:
         field = "addLabelIds" if applied else "removeLabelIds"
+        return self._change_labels(user_id, message_id, {field: [label_id]})
+
+    def change_labels(
+        self, user_id: str, message_id: str, add: list[str], remove: list[str]
+    ) -> dict:
+        changes = {}
+        if add:
+            changes["addLabelIds"] = add
+        if remove:
+            changes["removeLabelIds"] = remove
+        return self._change_labels(user_id, message_id, changes)
+
+    def _change_labels(self, user_id: str, message_id: str, changes: dict) -> dict:
         data = self.client.request(
             user_id,
             "POST",
             "/messages/" + quote(message_id, safe="") + "/modify",
             scopes=MODIFY_SCOPES,
-            json={field: [label_id]},
+            json=changes,
             params={"fields": "labelIds"},
         )
         return {"labelIds": data.get("labelIds", [])}

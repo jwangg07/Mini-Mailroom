@@ -19,10 +19,23 @@ class ChatExchange(BaseModel):
     answer: str = Field(min_length=1, max_length=8_000)
 
 
+class DraftContext(BaseModel):
+    to: str = Field(max_length=320)
+    subject: DraftSubject
+    body: str = Field(max_length=100_000)
+
+
 class AssistantRequest(BaseModel):
     prompt: Prompt
     message_id: MessageId | None = None
     history: list[ChatExchange] = Field(default_factory=list, max_length=4)
+    draft: DraftContext | Literal["sent", "uncertain", "compose"] | None = None
+
+
+class WritePermission(BaseModel):
+    send: bool = False
+    labels: bool = False
+    label_limit: int | None = Field(None, ge=1)
 
 
 class DraftAction(BaseModel):
@@ -42,6 +55,13 @@ class LabelAction(BaseModel):
 AssistantAction = Annotated[DraftAction | LabelAction, Field(discriminator="kind")]
 
 
+class MessageLabelUpdate(BaseModel):
+    message_id: MessageId
+    label_ids: list[str]
+
+
 class AssistantResponse(BaseModel):
     answer: str
     actions: list[AssistantAction] | None = None
+    label_updates: list[MessageLabelUpdate] | None = None
+    draft_delivery: Literal["sent", "uncertain"] | None = None

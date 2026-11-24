@@ -185,7 +185,6 @@ export default function Mailbox() {
       <AssistantChat
         open={assistantOpen}
         selected={selected}
-        labels={labels}
         updating={updating}
         onClose={() => {
           setAssistantOpen(false)
@@ -203,6 +202,14 @@ export default function Mailbox() {
           }
           reportError('Open the email you want to update first.')
           return Promise.resolve(false)
+        }}
+        onLabelsUpdated={(updates) => {
+          if (updatePending.current) return
+          setSelected((current) => {
+            if (!current) return current
+            const update = updates.find(({ message_id }) => message_id === current.id)
+            return update ? { ...current, labelIds: update.label_ids } : current
+          })
         }}
         onOpenMessage={openMessage}
       />

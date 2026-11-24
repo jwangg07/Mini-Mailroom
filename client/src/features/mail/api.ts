@@ -78,7 +78,12 @@ export async function sendMail(draft: MailDraft): Promise<void> {
 }
 
 export function askAssistant(
-  request: { prompt: string; history: AssistantExchange[]; message_id?: string },
+  request: {
+    prompt: string
+    history: AssistantExchange[]
+    message_id?: string
+    draft?: MailDraft | 'sent' | 'uncertain' | 'compose'
+  },
   signal: AbortSignal,
 ): Promise<AssistantReply> {
   return postMail('/api/mail/assistant', request, signal)

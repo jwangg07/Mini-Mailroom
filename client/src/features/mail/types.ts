@@ -48,7 +48,14 @@ export type AssistantAction =
   | { kind: 'draft'; to?: string; subject: string; body: string }
   | { kind: 'label'; message_id: string; label_id: string; label_name: string }
 
+export type MessageLabelUpdate = {
+  message_id: string
+  label_ids: string[]
+}
+
 export type AssistantReply = {
   answer: string
   actions?: AssistantAction[]
+  label_updates?: MessageLabelUpdate[]
+  draft_delivery?: 'sent' | 'uncertain'
 }

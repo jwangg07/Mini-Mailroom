@@ -417,6 +417,43 @@ def test_inbox_loads_and_decrypts_credentials_once_per_page(setup, monkeypatch):
         assert read_credentials.call_count == decrypt.call_count == page_number
 
 
+def test_read_recent_messages_fetches_bodies_and_reports_unreadable_mail(setup):
+    _, _, service, session = setup
+
+    def fetch(method, url, *, params, **kwargs):
+        assert method == "GET"
+        if url.endswith("/messages"):
+            assert params == {
+                "labelIds": "INBOX",
+                "pageToken": "older",
+                "maxResults": 2,
+            }
+            return provider_response(
+                {"messages": [{"id": "a"}, {"id": "b"}], "nextPageToken": "next"}
+            )
+        assert params == {"format": "full"}
+        if url.endswith("/b"):
+            return Mock(status_code=404)
+        return provider_response(
+            {
+                "id": "a",
+                "payload": {
+                    "mimeType": "text/plain",
+                    "body": {
+                        "data": base64.urlsafe_b64encode(b"Deadline Monday").decode()
+                    },
+                },
+            }
+        )
+
+    session.request.side_effect = fetch
+    page = service.recent_messages("alice", 2, "older")
+    assert page["nextPageToken"] == "next"
+    assert page["unreadable"] == 1
+    assert [message["body"] for message in page["messages"]] == ["Deadline Monday"]
+    assert session.request.call_count == 3
+
+
 def test_inbox_workers_share_recovery_after_gmail_rejects_token(setup, monkeypatch):
     _, _, service, session = setup
     workers = Barrier(5, timeout=5)
