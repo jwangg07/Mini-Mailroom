@@ -28,5 +28,6 @@ class Settings(BaseSettings):
     send_requests_per_minute: int = Field(default=5, ge=1, le=30)
     groq_api_key: SecretStr = SecretStr("")
     groq_api_key_secret_arn: str = ""
-    groq_model: str = "openai/gpt-oss-20b"
+    groq_model: str = "openai/gpt-oss-120b"
+    groq_fallback_model: str | None = None
     assistant_requests_per_minute: int = Field(default=5, ge=1, le=30)

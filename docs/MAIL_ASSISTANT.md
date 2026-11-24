@@ -12,9 +12,10 @@ suggestions opens review controls. **Review and send** lets you edit a draft.
 You can also ask the assistant to send the draft as written. **Use open email**
 includes the selected message when you ask about it.
 
-The agent gets two short chat exchanges and loads mail, labels, or the current
-draft as needed. Inbox reads page through messages in batches and shorten long
-bodies. Groq receives the plain-text excerpts and metadata the tools return.
+The agent gets one short chat exchange and loads mail, labels, or the current
+draft as needed. Inbox reads use brief body excerpts, with a smaller budget
+when loading labels for classification. A batch that completes the request
+can return Gmail's receipt directly.
 Before a Gmail write, a separate check uses only the latest user prompt to
 verify that it requests the action. The Gmail connection belongs to the current
 Mini-Mailroom session. Confirmed updates are returned to the chat.
@@ -23,8 +24,10 @@ Mini-Mailroom session. Confirmed updates are returned to the chat.
 
 Set `GROQ_API_KEY` in the private `server/.env` file, then use the normal
 Mini-Mailroom development setup and Gmail sign-in. `GROQ_MODEL` defaults to
-`openai/gpt-oss-20b`. If you override it, choose a Groq model that supports
-local tool calling and JSON mode. [Groq local tool calling](https://console.groq.com/docs/tool-use/local-tool-calling)
+`openai/gpt-oss-120b`, with `openai/gpt-oss-20b` as the default fallback.
+If you set `GROQ_MODEL=openai/gpt-oss-20b`, the default fallback is 120B.
+Set `GROQ_FALLBACK_MODEL` to override the fallback or set it to an empty value
+to disable it. Both models need local tool calling and JSON mode. [Groq local tool calling](https://console.groq.com/docs/tool-use/local-tool-calling)
 
 ## Enable it in AWS
 
@@ -59,8 +62,10 @@ the assistant enabled.
 
 3. In **Lambda → Configuration → Environment variables**, add
    `GROQ_API_KEY_SECRET_ARN` and preserve the existing variables. Optional
-   settings are `GROQ_MODEL` and `ASSISTANT_REQUESTS_PER_MINUTE` (default
-   `5` per signed-in user). The key itself belongs in Secrets Manager.
+   settings are `GROQ_MODEL`, `GROQ_FALLBACK_MODEL`, and
+   `ASSISTANT_REQUESTS_PER_MINUTE` (default `5` per signed-in user). The
+   primary and fallback use the same Groq key. Enable both models in the
+   Groq project if it restricts model access.
 4. In **Lambda → Configuration → General configuration**, set the timeout to
    **60 seconds** for the initial test. This leaves time for session and secret
    lookups as well as the agent's request deadline. The function needs outbound
@@ -112,9 +117,10 @@ HTTP 401 indicates a missing or expired session. HTTP 503 with
 `Mail assistant temporarily unavailable.`, check the secret ARN, the
 `GROQ_API_KEY` field, and the execution role permissions. HTTP 429 with
 `Groq's rate limit was reached` means the Groq organization hit a quota. Check
-the organization's model limits, including tokens per minute, and use the
-`Retry-After` delay when returned. The chat keeps your prompt for retry. A
-single chat turn can make several Groq calls. [Groq rate limits](https://console.groq.com/docs/rate-limits)
+the organization's model limits, including tokens per minute. A Groq `429`
+switches the current turn to the fallback model at the failed call. If that
+model also returns `429`, the chat keeps your prompt and shows the retry delay
+when provided. [Groq rate limits](https://console.groq.com/docs/rate-limits)
 
 For HTTP 502, check the provider status and error code in the Lambda's
 CloudWatch logs. For example, `tool_use_failed` means Groq rejected a generated

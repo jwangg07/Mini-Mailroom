@@ -58,6 +58,7 @@ class TurnResults:
     delivery_notes: list[str] = field(default_factory=list)
     draft_delivery: Literal["sent", "uncertain"] | None = None
     label_failures: set[str] = field(default_factory=set)
+    done: bool = False
 
     def response(self, answer: str = "") -> AssistantResponse:
         if not answer:
@@ -67,9 +68,9 @@ class TurnResults:
                     f"Gmail confirmed label updates for {len(self.labels)} emails."
                 )
             if self.label_failures:
-                notes.append(
-                    f"Gmail could not confirm {len(self.label_failures)} label updates."
-                )
+                failures = len(self.label_failures)
+                updates = "update" if failures == 1 else "updates"
+                notes.append(f"Gmail could not confirm {failures} label {updates}.")
             if self.actions:
                 notes.append("Your draft or label suggestion is ready.")
             answer = "\n\n".join(notes)
@@ -119,8 +120,13 @@ def create_mailbox_server(
     uncertain: set[str] = set()
     labels: dict[str, str] | None = None
 
-    def expose(messages: list[dict], *, full: bool) -> list[dict]:
-        allowance = min(2_400, 4_000 // max(1, len(messages))) if full else 180
+    def expose(
+        messages: list[dict], *, full: bool, label_ids: dict[str, str] | None = None
+    ) -> list[dict]:
+        size = max(1, len(messages))
+        allowance = min(2_400, 2_800 // size) if full else min(120, 1_000 // size)
+        if label_ids is not None:
+            allowance = min(allowance, 600, 1_800 // size)
         output = []
         for message in messages:
             visible_messages.add(message["id"])
@@ -130,13 +136,19 @@ def create_mailbox_server(
             text = message.get("body" if full else "snippet", "")
             item = {
                 "id": message["id"],
-                "from": message["from"][:240],
-                "subject": message["subject"][:240],
-                "date": message.get("date", ""),
-                "body" if full else "snippet": excerpt(text, allowance),
+                "from": message["from"][:200],
+                "subject": message["subject"][:160],
             }
-            if full:
-                item["labels"] = message.get("labelIds", [])
+            if date := message.get("date"):
+                item["date"] = date[:48]
+            if text:
+                item["body" if full else "snippet"] = excerpt(text, allowance)
+            if label_ids is not None:
+                applied = [
+                    label for label in message.get("labelIds", []) if label in label_ids
+                ]
+                if applied:
+                    item["labels"] = applied
             output.append(item)
         return output
 
@@ -151,16 +163,22 @@ def create_mailbox_server(
     async def read_recent_messages(
         limit: PageSize = 5, page_token: PageToken = "", include_labels: bool = False
     ) -> dict[str, Any]:
-        """Read recent inbox emails. Set include_labels for the label catalog. Page for older mail."""
+        """Read recent inbox emails. include_labels adds the label catalog. Use next_page_token for more."""
         page = await gmail_call(
             lambda: mail_service().recent_messages(user_id, limit, page_token)
         )
-        return {
-            "emails": expose(page["messages"], full=True),
-            "next_page_token": page.get("nextPageToken"),
-            "unreadable": page.get("unreadable", 0),
-            **(await list_labels() if include_labels else {}),
+        catalog = await list_labels() if include_labels else {}
+        result = {
+            "emails": expose(
+                page["messages"], full=True, label_ids=catalog.get("labels")
+            ),
+            **catalog,
         }
+        if token := page.get("nextPageToken"):
+            result["next_page_token"] = token
+        if unreadable := page.get("unreadable"):
+            result["unreadable"] = unreadable
+        return result
 
     @server.tool(annotations=read_only, structured_output=True)
     async def search_mail(
@@ -172,10 +190,10 @@ def create_mailbox_server(
                 user_id, query, limit=limit, page_token=page_token
             )
         )
-        return {
-            "emails": expose(page["messages"], full=False),
-            "next_page_token": page.get("nextPageToken"),
-        }
+        result = {"emails": expose(page["messages"], full=False)}
+        if token := page.get("nextPageToken"):
+            result["next_page_token"] = token
+        return result
 
     @server.tool(annotations=read_only, structured_output=True)
     async def read_messages(
@@ -196,13 +214,18 @@ def create_mailbox_server(
             ),
             return_exceptions=True,
         )
-        return {
+        catalog = await list_labels() if include_labels else {}
+        result = {
             "emails": expose(
-                [item for item in fetched if isinstance(item, dict)], full=True
+                [item for item in fetched if isinstance(item, dict)],
+                full=True,
+                label_ids=catalog.get("labels"),
             ),
-            "errors": [str(item) for item in fetched if isinstance(item, ToolError)],
-            **(await list_labels() if include_labels else {}),
+            **catalog,
         }
+        if errors := [str(item) for item in fetched if isinstance(item, ToolError)]:
+            result["errors"] = errors
+        return result
 
     @server.tool(annotations=read_only, structured_output=True)
     async def list_labels(query: str = "") -> dict[str, Any]:
@@ -214,7 +237,7 @@ def create_mailbox_server(
         }
         return {
             "labels": dict(list(available.items())[:80]),
-            "more": len(available) > 80,
+            **({"more": True} if len(available) > 80 else {}),
         }
 
     @server.tool(annotations=read_only, structured_output=True)
@@ -247,8 +270,9 @@ def create_mailbox_server(
     @server.tool(structured_output=True)
     async def change_labels(
         updates: Annotated[list[LabelChange], Field(min_length=1, max_length=20)],
+        done: bool = False,
     ) -> dict[str, Any]:
-        """Add or remove existing Gmail labels on retrieved emails. Combine updates in one call."""
+        """Batch add/remove label IDs on read emails. Set done=true if this finishes the whole request."""
         permission = await authorize()
         if not permission.labels:
             raise ToolError("The latest request did not authorize changing labels.")
@@ -302,9 +326,9 @@ def create_mailbox_server(
             }
 
         changed_messages.update(targets)
-        return {
-            "updates": await asyncio.gather(*(change(update) for update in updates))
-        }
+        outcomes = await asyncio.gather(*(change(update) for update in updates))
+        results.done = results.done or done
+        return {"updates": outcomes}
 
     async def deliver(
         to: str, subject: str, body: str, *, current_draft: bool = False

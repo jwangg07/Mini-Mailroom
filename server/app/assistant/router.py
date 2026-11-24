@@ -67,7 +67,13 @@ def create_assistant_router(
 
         try:
             return await run_assistant(
-                body, settings.groq_model, api_key, user, mail_service, limit_send
+                body,
+                settings.groq_model,
+                api_key,
+                user,
+                mail_service,
+                limit_send,
+                fallback_model=settings.groq_fallback_model,
             )
         except* (APIError, MCPError, TimeoutError, AssistantResponseError) as errors:
             error = errors.exceptions[0]

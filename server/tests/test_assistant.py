@@ -185,27 +185,30 @@ def test_assistant_summarizes_recent_mail_with_minimal_context(setup, monkeypatc
     gmail.send.assert_not_called()
     gmail.change_labels.assert_not_called()
     assert [message["content"] for message in requests[0]["messages"][1:-1]] == [
-        "Earlier request 2",
-        "y" * 800,
         "Earlier request 3",
-        "y" * 800,
+        "y" * 500,
     ]
     read = json.loads(requests[1]["messages"][-1]["content"])
     assert len(read["emails"]) == 5
-    assert sum(len(email["body"]) for email in read["emails"]) <= 4_000
+    assert sum(len(email["body"]) for email in read["emails"]) <= 2_800
     assert read["emails"][0]["body"].endswith("Deadline is Tuesday at noon.")
     assert "Private HTML" not in json.dumps(requests)
     assert "Image data" not in json.dumps(requests)
     assert "Private unrelated draft." not in json.dumps(requests)
     assert all(request["max_completion_tokens"] == 1_024 for request in requests)
     assert all(request["reasoning_effort"] == "low" for request in requests)
+    assert all(request["model"] == "openai/gpt-oss-120b" for request in requests)
 
 
-def test_assistant_applies_relevant_labels_in_the_same_turn(setup, monkeypatch):
+@pytest.mark.parametrize("finish_after_updates", [False, True])
+def test_assistant_applies_relevant_labels_in_the_same_turn(
+    setup, monkeypatch, finish_after_updates
+):
     store, gmail = setup
-    gmail.recent_messages.return_value = {
-        "messages": [mailbox_email(i) for i in range(5)]
-    }
+    emails = [mailbox_email(i) for i in range(5)]
+    for email in emails:
+        email["body"] *= 100
+    gmail.recent_messages.return_value = {"messages": emails}
     gmail.labels.return_value = [
         {"id": "Label_1", "name": "Work"},
         {"id": "Label_2", "name": "Travel"},
@@ -220,26 +223,44 @@ def test_assistant_applies_relevant_labels_in_the_same_turn(setup, monkeypatch):
     raw_prompt = (
         "Go through the five newest emails and file them under the labels that fit."
     )
-    requests = mock_groq(
-        monkeypatch,
+    responses = [
         completion(
             tool_calls=[
                 tool_call("read_recent_messages", '{"limit":5,"include_labels":true}'),
             ],
             finish_reason="tool_calls",
         ),
-        completion(
-            tool_calls=[
-                tool_call(
-                    "change_labels",
-                    '{"updates":[{"message_id":"m0","add":["Label_1"]},{"message_id":"m1","add":["Label_2"]},{"message_id":"m4","add":["Label_1","Label_2"]}]}',
-                )
-            ],
-            finish_reason="tool_calls",
-        ),
-        completion('{"send":false,"labels":true,"label_limit":5}'),
-        completion("I labeled two messages. Gmail rejected the remaining update."),
+    ]
+    if finish_after_updates:
+        responses.append(httpx.Response(429, json={"error": "Primary rate-limited"}))
+    responses.extend(
+        [
+            completion(
+                tool_calls=[
+                    tool_call(
+                        "change_labels",
+                        json.dumps(
+                            {
+                                "updates": [
+                                    {"message_id": "m0", "add": ["Label_1"]},
+                                    {"message_id": "m1", "add": ["Label_2"]},
+                                    {"message_id": "m4", "add": ["Label_1", "Label_2"]},
+                                ],
+                                "done": finish_after_updates,
+                            }
+                        ),
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            completion('{"send":false,"labels":true,"label_limit":5}'),
+        ]
     )
+    if not finish_after_updates:
+        responses.append(
+            completion("I labeled two messages. Gmail rejected the remaining update.")
+        )
+    requests = mock_groq(monkeypatch, *responses)
     with signed_in_client(store, groq_api_key=SecretStr("fake-groq-key")) as client:
         response = ask(client, raw_prompt)
     assert response.status_code == 200, response.text
@@ -261,13 +282,35 @@ def test_assistant_applies_relevant_labels_in_the_same_turn(setup, monkeypatch):
         "m0": ["INBOX", "Label_1"],
         "m4": ["INBOX", "Label_1", "Label_2"],
     }
-    assert requests[2]["messages"][1:] == [{"role": "user", "content": raw_prompt}]
-    assert requests[2]["response_format"] == {"type": "json_object"}
-    assert requests[2]["max_completion_tokens"] == 256
     mailbox = json.loads(requests[1]["messages"][-1]["content"])
     assert mailbox["labels"] == {"Label_1": "Work", "Label_2": "Travel"}
-    outcomes = json.loads(requests[3]["messages"][-1]["content"])["updates"]
-    assert outcomes[1] == {"id": "m1", "error": "Gmail rate limit reached."}
+    assert sum(len(email["body"]) for email in mailbox["emails"]) <= 1_800
+    parameters = next(
+        tool["function"]["parameters"]
+        for tool in requests[1]["tools"]
+        if tool["function"]["name"] == "change_labels"
+    )
+    assert "$defs" not in parameters
+    assert parameters["properties"]["updates"]["items"]["required"] == ["message_id"]
+    authorize = requests[3] if finish_after_updates else requests[2]
+    assert authorize["messages"][1:] == [{"role": "user", "content": raw_prompt}]
+    assert authorize["response_format"] == {"type": "json_object"}
+    assert authorize["max_completion_tokens"] == 256
+    if finish_after_updates:
+        assert [request["model"] for request in requests] == [
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "openai/gpt-oss-20b",
+        ]
+        assert requests[1]["messages"] == requests[2]["messages"]
+        assert response.json()["answer"] == (
+            "Gmail confirmed label updates for 2 emails.\n\n"
+            "Gmail could not confirm 1 label update."
+        )
+    else:
+        outcomes = json.loads(requests[3]["messages"][-1]["content"])["updates"]
+        assert outcomes[1] == {"id": "m1", "error": "Gmail rate limit reached."}
 
 
 @pytest.mark.parametrize(
@@ -316,8 +359,7 @@ def test_draft_and_send_runs_without_a_follow_up_and_records_delivery(
     gmail.send.return_value = {"id": "sent1"}
     prompt = "Write Lee at lee@example.com a thank-you for the review, then send it."
     outgoing = '{"to":"lee@example.com","subject":"Thanks","body":"Thanks for the review, Lee!"}'
-    requests = mock_groq(
-        monkeypatch,
+    responses = [
         completion(
             tool_calls=[tool_call("send_email", outgoing, "first")],
             finish_reason="tool_calls",
@@ -328,7 +370,10 @@ def test_draft_and_send_runs_without_a_follow_up_and_records_delivery(
             finish_reason="tool_calls",
         ),
         httpx.Response(status, json={"error": "Model unavailable after sending"}),
-    )
+    ]
+    if status == 429:
+        responses.append(completion("Email sent to lee@example.com."))
+    requests = mock_groq(monkeypatch, *responses)
     with signed_in_client(store, groq_api_key=SecretStr("fake-groq-key")) as client:
         response = ask(client, prompt)
     assert response.status_code == 200
@@ -342,6 +387,9 @@ def test_draft_and_send_runs_without_a_follow_up_and_records_delivery(
     )
     assert requests[1]["messages"][1:] == [{"role": "user", "content": prompt}]
     assert "Already sent" in requests[-1]["messages"][-1]["content"]
+    if status == 429:
+        assert requests[-1]["model"] == "openai/gpt-oss-20b"
+        assert requests[-1]["messages"] == requests[-2]["messages"]
 
 
 def test_draft_and_label_suggestions_keep_review_cards(setup, monkeypatch):
@@ -526,8 +574,9 @@ def test_disabled_and_provider_failure_responses(setup, monkeypatch):
 
 
 @pytest.mark.parametrize("during_authorization", [False, True])
+@pytest.mark.parametrize("fallback_model", [None, ""])
 def test_groq_rate_limit_stops_the_turn_and_preserves_retry_after(
-    setup, monkeypatch, during_authorization
+    setup, monkeypatch, during_authorization, fallback_model
 ):
     store, gmail = setup
     responses = []
@@ -545,19 +594,30 @@ def test_groq_rate_limit_stops_the_turn_and_preserves_retry_after(
             json={"error": {"code": "rate_limit_exceeded", "message": "Private text"}},
         )
     )
+    if fallback_model is None:
+        responses.append(httpx.Response(429, headers={"Retry-After": "23"}))
     requests = mock_groq(monkeypatch, *responses)
-    with signed_in_client(store, groq_api_key=SecretStr("fake-groq-key")) as client:
+    with signed_in_client(
+        store,
+        groq_api_key=SecretStr("fake-groq-key"),
+        groq_model="openai/gpt-oss-20b",
+        groq_fallback_model=fallback_model,
+    ) as client:
         response = ask(
             client,
             "Send the draft.",
             draft={"to": "lee@example.com", "subject": "Hello", "body": "Hello Lee"},
         )
     assert response.status_code == 429
-    assert response.headers["Retry-After"] == "18"
+    retry_after = "23" if fallback_model is None else "18"
+    assert response.headers["Retry-After"] == retry_after
     assert response.json() == {
-        "detail": "Groq's rate limit was reached. Try again in 18 seconds."
+        "detail": f"Groq's rate limit was reached. Try again in {retry_after} seconds."
     }
     assert len(requests) == len(responses)
+    assert requests[-1]["model"] == (
+        "openai/gpt-oss-120b" if fallback_model is None else "openai/gpt-oss-20b"
+    )
     gmail.send.assert_not_called()
 
 

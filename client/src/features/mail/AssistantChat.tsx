@@ -164,9 +164,9 @@ export default function AssistantChat({
     const draftStatus = draftId ? currentDeliveries.current[draftId]?.status : undefined
     const draft = draftId && (!draftStatus || draftStatus === 'rejected') ? getDraft(draftId) : undefined
     const closedDraft = draftStatus === 'sent' || draftStatus === 'uncertain' || draftStatus === 'compose'
-    const history = turns.slice(-2).map(({ prompt, reply }) => ({
-      prompt: Array.from(prompt).slice(0, 500).join(''),
-      answer: Array.from(reply.answer).slice(0, 800).join(''),
+    const history = turns.slice(-1).map(({ prompt, reply }) => ({
+      prompt: Array.from(prompt).slice(0, 300).join(''),
+      answer: Array.from(reply.answer).slice(0, 500).join(''),
     }))
     setPending(question)
     try {
