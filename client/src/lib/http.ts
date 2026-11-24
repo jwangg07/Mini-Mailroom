@@ -1,3 +1,12 @@
+export class HttpError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
 /** Shared JSON requests. Callers own cancellation and user-facing fallback text. */
 export async function requestJson<T>(
   path: string,
@@ -7,7 +16,8 @@ export async function requestJson<T>(
   const response = await fetch(path, options)
   if (!response.ok) {
     const data = await response.json().catch(() => null)
-    throw new Error(
+    throw new HttpError(
+      response.status,
       typeof data?.detail === 'string' ? data.detail : fallbackMessage,
     )
   }

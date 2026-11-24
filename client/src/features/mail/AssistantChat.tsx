@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { askAssistant } from './api'
+import { HttpError } from '../../lib/http'
+import { askAssistant, sendMail } from './api'
+import AssistantDraftCard from './AssistantDraftCard'
+import type { DraftDelivery } from './AssistantDraftCard'
 import type { AssistantReply, MailDraft, MailMessage } from './types'
 import './assistant.css'
 
@@ -13,7 +16,7 @@ type AssistantChatProps = {
   selected: MailMessage | null
   updating: boolean
   onClose: () => void
-  onUseDraft: (draft: MailDraft) => void
+  onUseDraft: (draft: MailDraft) => boolean
   onApplyLabel: (messageId: string, labelId: string, reportError: ReportError) => void
   onOpenMessage: (messageId: string, reportError: ReportError) => Promise<void>
 }
@@ -29,6 +32,17 @@ const messagePrompts = [
   { label: 'Draft reply', text: 'Draft a concise reply to this email.' },
   { label: 'Suggest labels', text: 'Which of my existing Gmail labels would fit this email?' },
 ]
+
+const sendCommand = /^(?:yes[, ]+)?(?:please\s+)?send(?:\s+(?:it|this|that|(?:the|this|that)\s+(?:draft|email|message)))?(?:\s+now)?[.!]?$/i
+const uncertainDelivery = 'Send result unknown. Check Sent in Gmail before sending again.'
+
+function latestDraftId(turns: Exchange[]): string | undefined {
+  const turnIndex = turns.findLastIndex(({ reply }) => reply.actions?.some(({ kind }) => kind === 'draft'))
+  if (turnIndex >= 0) {
+    const actionIndex = turns[turnIndex].reply.actions?.findLastIndex(({ kind }) => kind === 'draft')
+    return `${turnIndex}:${actionIndex}`
+  }
+}
 
 function historyAnswer(reply: AssistantReply): string {
   // Preserve the draft itself so requests such as “make it shorter” have context.
@@ -52,12 +66,17 @@ export default function AssistantChat({
   const [turns, setTurns] = useState<Exchange[]>([])
   const [pending, setPending] = useState<Question | null>(null)
   const [error, setError] = useState('')
+  const [reviewId, setReviewId] = useState<string | null>(null)
+  const [deliveries, setDeliveries] = useState<Record<string, DraftDelivery>>({})
+  const currentDeliveries = useRef(deliveries)
+  const sendingDraft = useRef(false)
   const request = useRef<AbortController | null>(null)
   const promptField = useRef<HTMLTextAreaElement>(null)
   const transcript = useRef<HTMLDivElement>(null)
   const message = includeMessage ? selected : null
   const context = message ? message.subject || '(No subject)' : 'Inbox'
   const prompts = message ? messagePrompts : inboxPrompts
+  const sending = Object.values(deliveries).some(({ status }) => status === 'sending')
 
   useEffect(() => () => request.current?.abort(), [])
 
@@ -78,17 +97,64 @@ export default function AssistantChat({
   }
 
   function reset() {
+    if (sendingDraft.current) return
     cancel()
     setTurns([])
     setInput('')
     setError('')
+    setReviewId(null)
+    currentDeliveries.current = {}
+    setDeliveries(currentDeliveries.current)
     promptField.current?.focus()
+  }
+
+  function setDelivery(id: string, delivery: DraftDelivery) {
+    currentDeliveries.current = { ...currentDeliveries.current, [id]: delivery }
+    setDeliveries(currentDeliveries.current)
+  }
+
+  function reviewDraft(id = latestDraftId(turns)) {
+    const delivery = id ? currentDeliveries.current[id] : undefined
+    if (!id) setError('Ask the assistant to draft an email first.')
+    else if (delivery?.status === 'sent') setError('That email was already sent.')
+    else if (delivery?.status === 'compose') setError('Use Compose to send that draft.')
+    else if (delivery?.status === 'uncertain') setError(delivery.message)
+    else {
+      setError('')
+      setReviewId(id)
+    }
+  }
+
+  async function sendDraft(id: string, draft: MailDraft) {
+    const delivery = currentDeliveries.current[id]
+    if (sendingDraft.current || reviewId !== id || (delivery && delivery.status !== 'rejected')) return
+    sendingDraft.current = true
+    setDelivery(id, { status: 'sending' })
+    try {
+      await sendMail(draft)
+      setDelivery(id, { status: 'sent', to: draft.to })
+      setReviewId(null)
+    } catch (reason) {
+      if (reason instanceof HttpError && reason.status >= 400 && reason.status < 500 && reason.status !== 408) {
+        setDelivery(id, { status: 'rejected', message: reason.message })
+      } else {
+        setDelivery(id, { status: 'uncertain', to: draft.to, message: uncertainDelivery })
+        setReviewId(null)
+      }
+    } finally {
+      sendingDraft.current = false
+    }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const prompt = input.trim()
-    if (request.current || !prompt) return
+    if (request.current || sendingDraft.current || !prompt) return
+    if (sendCommand.test(prompt)) {
+      setInput('')
+      reviewDraft()
+      return
+    }
     const controller = new AbortController()
     request.current = controller
     const question = { prompt, context }
@@ -138,7 +204,7 @@ export default function AssistantChat({
           className="assistant-quiet"
           type="button"
           onClick={reset}
-          disabled={!turns.length && !pending && !input}
+          disabled={sending || (!turns.length && !pending && !input && !error)}
         >
           New chat
         </button>
@@ -175,22 +241,24 @@ export default function AssistantChat({
               <p className="assistant-answer">{turn.reply.answer}</p>
               {turn.reply.actions?.map((action, actionIndex) => {
                 if (action.kind === 'draft') {
+                  const id = `${index}:${actionIndex}`
+                  const draft = { to: action.to ?? '', subject: action.subject, body: action.body }
                   return (
-                    <div className="assistant-action" key={actionIndex}>
-                      <strong>{action.subject || '(No subject)'}</strong>
-                      {action.to && <small>To {action.to}</small>}
-                      <details>
-                        <summary>Preview draft</summary>
-                        <p>{action.body}</p>
-                      </details>
-                      <button className="assistant-chip" type="button" onClick={() => onUseDraft({
-                        to: action.to ?? '',
-                        subject: action.subject,
-                        body: action.body,
-                      })}>
-                        Open in compose
-                      </button>
-                    </div>
+                    <AssistantDraftCard
+                      key={actionIndex}
+                      draft={draft}
+                      delivery={deliveries[id]}
+                      reviewing={reviewId === id}
+                      sending={sending}
+                      onReview={() => reviewDraft(id)}
+                      onCancel={() => setReviewId(null)}
+                      onSend={(reviewed) => void sendDraft(id, reviewed)}
+                      onUseDraft={() => {
+                        if (!sendingDraft.current && onUseDraft(draft)) {
+                          setDelivery(id, { status: 'compose' })
+                        }
+                      }}
+                    />
                   )
                 }
                 const isOpen = selected?.id === action.message_id
@@ -237,7 +305,7 @@ export default function AssistantChat({
               key={label}
               className="assistant-chip"
               type="button"
-              disabled={pending !== null}
+              disabled={pending !== null || sending}
               onClick={() => {
                 setInput(text)
                 promptField.current?.focus()
@@ -262,13 +330,13 @@ export default function AssistantChat({
             }}
             rows={2}
             maxLength={4000}
-            readOnly={pending !== null}
+            readOnly={pending !== null || sending}
             placeholder="Ask about your mail…"
           />
           {pending ? (
             <button className="assistant-send" type="button" onClick={cancel}>Cancel</button>
           ) : (
-            <button className="assistant-send" type="submit" disabled={!input.trim()}>Send</button>
+            <button className="assistant-send" type="submit" disabled={sending || !input.trim()}>Send</button>
           )}
         </div>
         <p className="assistant-privacy">Prompts and relevant email text are processed by Groq.</p>

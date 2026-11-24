@@ -189,6 +189,43 @@
   cursor: pointer;
 }
 
+.assistant-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.assistant-send-review {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.assistant-send-review label {
+  display: grid;
+  gap: 3px;
+}
+
+.assistant-send-review input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ccd8c9;
+  border-radius: 6px;
+  background: white;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+}
+
+.assistant-draft-body {
+  max-height: 15rem;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #d7e0d3;
+  border-radius: 6px;
+  background: white;
+}
+
 .assistant-label {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;

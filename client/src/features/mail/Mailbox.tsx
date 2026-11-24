@@ -186,10 +186,10 @@ export default function Mailbox() {
           assistantButton.current?.focus()
         }}
         onUseDraft={(draft) => {
-          if (composeForm.current?.loadDraft(draft)) {
-            setAssistantOpen(false)
-            setComposing(true)
-          }
+          if (!composeForm.current?.loadDraft(draft)) return false
+          setAssistantOpen(false)
+          setComposing(true)
+          return true
         }}
         onApplyLabel={(messageId, labelId, reportError) => {
           if (selected?.id === messageId) {

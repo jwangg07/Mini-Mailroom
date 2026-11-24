@@ -6,9 +6,10 @@ the assistant read that specific message. Clear the checkbox to ask about the
 mailbox. The chat stays in the current page and sends the four most recent
 exchanges with each follow-up.
 
-Choose **Open in compose** to edit a generated draft. Send it from the compose
-form when it is ready. For an existing Gmail label suggested for an open
-message, choose **Apply label** to apply it.
+Choose **Review and send** on a draft card or type **send it** to review the
+latest draft. Check the recipient, subject, and message, then click **Send
+email**. Choose **Open in compose** to edit the subject or body before sending.
+For a Gmail label suggested for an open message, choose **Apply label**.
 
 The FastAPI route checks the session and request origin and uses the shared
 DynamoDB rate limiter in production. The Groq agent discovers tools through an
@@ -88,9 +89,10 @@ after the cache expires reads the current secret value.
 
 Open the app at its Function URL and sign in to the test mailbox. Open a test
 email and click **Assistant**. Try **Summarize** and send the prompt. Check that
-the response describes that email. Then try **Draft reply** and check that
-**Open in compose** fills the editable compose form. Try **Suggest labels**
-with an existing Gmail label and apply the suggestion to the test email.
+the response describes that email. Then try **Draft reply**, type **send it**,
+and send a test email to an account you control. Verify the delivery in Gmail.
+Try **Suggest labels** with an existing Gmail label and apply the suggestion to
+the test email.
 
 To check the API directly, run this in the developer console on the signed-in
 app page. The current session cookie goes with the same-origin request. The
